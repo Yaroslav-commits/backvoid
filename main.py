@@ -1,17 +1,3 @@
-"""
-Void Play — запуск бота (aiogram 3) + раздача Web App.
-
-Что делает:
-  • /start → приветствие и кнопка «Играть», открывающая Web App по WEBAPP_URL
-  • ставит кнопку меню (слева от поля ввода) тоже на Web App
-  • ловит реферальные ссылки: t.me/<bot>?start=ref_123
-  • (по желанию) сам раздаёт файлы фронтенда на SERVE_PORT, если SERVE_STATIC=1
-
-Запуск:
-  pip install -r requirements.txt
-  cp .env.example .env   # вписать BOT_TOKEN и WEBAPP_URL
-  python main.py
-"""
 import asyncio
 import logging
 import os
