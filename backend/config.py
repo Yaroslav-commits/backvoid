@@ -38,7 +38,8 @@ CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/testkanalbot")
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/Hanoru")
 GIFTS_ACCOUNT = os.getenv("GIFTS_ACCOUNT", "@voidplay")
 
-ADMIN_IDS = _ints(os.getenv("ADMIN_IDS", "6378471773", "6883630937"))
+# Админы бота (Telegram id), записаны прямо в коде
+ADMIN_IDS = [6378471773, 6883630937]
 
 # Экономика (1 звезда в игре = 1 Telegram Star)
 SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "15"))

@@ -37,9 +37,9 @@ def build_router(game: Game) -> Router:
         if is_new and command.args:
             log.info("new user %s by %s", u.id, command.args)
         await message.answer(
-            f"Привет, <b>{u.first_name}</b>! <tg-emoji emoji-id='5199885118214255386'>👋</tg-emoji>\n\n"
+            f'Привет, <b>{u.first_name}</b>! <tg-emoji emoji-id="5199885118214255386">👋</tg-emoji>\n\n'
             "Добро пожаловать в <b>Void Play</b> — апгрейдер, кейсы, мины и другие игры за звёзды и подарки.\n\n"
-            "Жми «Играть» <tg-emoji emoji-id='5231102735817918643'>👇</tg-emoji>",
+            'Жми «Играть» <tg-emoji emoji-id="5231102735817918643">👇</tg-emoji>',
             reply_markup=play_kb(),
         )
 
