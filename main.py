@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """
 Void Play — бот + API для Web App в одном процессе.
 
@@ -9,6 +10,8 @@ Void Play — бот + API для Web App в одном процессе.
 """
 from __future__ import annotations
 
+=======
+>>>>>>> e3a9820361e8aee10e621e3f9e7616973a666676
 import asyncio
 import logging
 
