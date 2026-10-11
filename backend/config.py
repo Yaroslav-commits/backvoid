@@ -33,12 +33,12 @@ DB_PATH = Path(os.getenv("DB_PATH", ROOT / "voidplay.db"))
 AVATAR_DIR = Path(os.getenv("AVATAR_DIR", ROOT / "avatars"))
 
 # Канал для задания «подпишись». Бот должен быть админом канала
-CHANNEL = os.getenv("CHANNEL", "@voidplay")
-CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/voidplay")
-SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/voidplay_support")
+CHANNEL = os.getenv("CHANNEL", "@testkanalbot")
+CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/testkanalbot")
+SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/Hanoru")
 GIFTS_ACCOUNT = os.getenv("GIFTS_ACCOUNT", "@voidplay")
 
-ADMIN_IDS = _ints(os.getenv("ADMIN_IDS", ""))
+ADMIN_IDS = _ints(os.getenv("ADMIN_IDS", "6378471773", "6883630937"))
 
 # Экономика (1 звезда в игре = 1 Telegram Star)
 SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "15"))
