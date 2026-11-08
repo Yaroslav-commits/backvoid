@@ -3,6 +3,7 @@ Void Play — бот (aiogram 3) + API для Web App в одном процес
 
   • /start, кнопка «Играть», оплата Telegram Stars, админ-команды
   • HTTP API на PORT (8080) для сайта: /api/*
+  • (необязательно) раздаёт сам сайт, если задан WEBAPP_DIR
 
 Файлы:  main.py (бот + API + запуск) · game.py (база и логика) · config.py (настройки и каталог)
 Запуск: pip install -r requirements.txt  →  python main.py
@@ -45,7 +46,7 @@ log = logging.getLogger("voidplay")
 
 def play_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎮 Играть", web_app=WebAppInfo(url=config.WEBAPP_URL))],
+        [InlineKeyboardButton(text="🚀 Играть", web_app=WebAppInfo(url=config.WEBAPP_URL))],
         [InlineKeyboardButton(text="📢 Канал", url=config.CHANNEL_URL)],
     ])
 
@@ -61,7 +62,7 @@ def build_router(game: Game) -> Router:
             log.info("new user %s by %s", u.id, command.args)
         await message.answer(
             f'Привет, <b>{u.first_name}</b>! <tg-emoji emoji-id="5199885118214255386">👋</tg-emoji>\n\n'
-            "Добро пожаловать в <b>Void Play</b> — апгрейдер, кейсы, мины и другие игры за звёзды и подарки.\n\n"
+            f"Добро пожаловать в <b>{config.APP_NAME}</b> — апгрейдер, мины и другие игры за звёзды и подарки.\n\n"
             'Жми «Играть» <tg-emoji emoji-id="5231102735817918643">👇</tg-emoji>',
             reply_markup=play_kb(),
         )
@@ -85,7 +86,7 @@ def build_router(game: Game) -> Router:
             log.warning("amount mismatch %s != %s", p.total_amount, amount)
             amount, bonus = p.total_amount, 0
         if game.credit_deposit(uid, amount, p.telegram_payment_charge_id, bonus):
-            await message.answer(f"✅ Зачислено <b>{amount + bonus} ⭐</b> на баланс Void Play", reply_markup=play_kb())
+            await message.answer(f"✅ Зачислено <b>{amount + bonus} ⭐</b> на баланс {config.APP_NAME}", reply_markup=play_kb())
 
     # ---------- админка ----------
     def is_admin(m: Message) -> bool:
@@ -135,11 +136,12 @@ def build_router(game: Game) -> Router:
         users = db.one("SELECT COUNT(*) c FROM users")["c"]
         dep = db.one("SELECT COALESCE(SUM(amount),0) s FROM payments")["s"]
         bets = db.one("SELECT COUNT(*) c, COALESCE(SUM(amount),0) s FROM transactions WHERE type='fee'")
-        wins = db.one("SELECT COALESCE(SUM(amount),0) s FROM transactions WHERE type='win'")["s"]
+        wins = db.one("SELECT COALESCE(SUM(amount),0) s FROM transactions WHERE type='win' AND gift_id IS NOT NULL")["s"]
+        swins = db.one("SELECT COALESCE(SUM(amount),0) s FROM transactions WHERE type='win' AND gift_id IS NULL")["s"]
         wd = db.one("SELECT COUNT(*) c, COALESCE(SUM(amount),0) s FROM transactions WHERE type='wd' AND status='pending'")
         await message.answer(
             f"👥 Игроков: {users}\n💰 Пополнено Stars: {dep}\n🎲 Ставок: {bets['c']} на {bets['s']} ⭐\n"
-            f"🏆 Выиграно NFT на {wins} ⭐\n💸 Заявок на вывод: {wd['c']} на {wd['s']} ⭐")
+            f"🏆 Выиграно NFT на {wins} ⭐, звёздами {swins} ⭐\n💸 Заявок на вывод: {wd['c']} на {wd['s']} ⭐")
 
     @r.message(F.text)
     async def fallback(message: Message):
@@ -169,7 +171,7 @@ def _cors_headers(request: web.Request) -> dict:
     return {
         "Access-Control-Allow-Origin": origin if (allow and origin) else ("*" if allow else ""),
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, X-Init-Data, X-Dev-User",
+        "Access-Control-Allow-Headers": "Content-Type, X-Init-Data, X-Dev-User, Authorization",
         "Access-Control-Max-Age": "86400",
         "Vary": "Origin",
     }
@@ -188,6 +190,8 @@ async def cors_mw(request: web.Request, handler):
         resp = fail("auth", 401)
     except web.HTTPException as e:
         resp = e
+    except (ValueError, TypeError):  # кривые числа в запросе
+        resp = fail("bad_amount")
     except Exception:  # noqa: BLE001
         log.exception("api error")
         resp = fail("server", 500)
@@ -226,8 +230,17 @@ def full_state(request: web.Request, uid: int) -> dict:
 
 
 # ---------------- эндпоинты ----------------
-async def h_health(_):
-    return ok(time=int(time.time()))
+VERSION = "2.0"
+
+
+async def h_health(request):
+    """Проверка связи: открой https://<домен>/api/health в браузере — должно быть ok: true."""
+    return ok(time=int(time.time()), name=config.APP_NAME, version=VERSION,
+              bot=request.app.get("bot_username", ""), devMode=config.DEV_MODE)
+
+
+async def h_root(_):
+    return web.Response(text=f"{config.APP_NAME} API v{VERSION} работает. Проверка: /api/health")
 
 
 async def h_auth(request):
@@ -277,6 +290,29 @@ async def h_upgrade(request):
     b = await body(request)
     res = request.app["game"].upgrade(uid, str(b.get("target", "")), stake=int(b.get("stake") or 0), gift_uid=b.get("gift") or None)
     return ok(res)
+
+
+async def h_mines_start(request):
+    uid = current_user(request)
+    b = await body(request)
+    g = request.app["game"]
+    game = g.mines_start(uid, int(b.get("stake") or 0), int(b.get("mines") or 3))
+    return ok(game=game, balance=g.balance(uid))
+
+
+async def h_mines_open(request):
+    uid = current_user(request)
+    b = await body(request)
+    g = request.app["game"]
+    res = g.mines_open(uid, int(b.get("cell", -1)))
+    return ok(res, balance=g.balance(uid))
+
+
+async def h_mines_cashout(request):
+    uid = current_user(request)
+    g = request.app["game"]
+    res = g.mines_cashout(uid)
+    return ok(res, balance=g.balance(uid))
 
 
 async def h_tasks_claim(request):
@@ -379,10 +415,21 @@ def build_app(game: Game, bot: Bot) -> web.Application:
     r.add_post("/api/subscribe/check", h_subscribe)
     r.add_post("/api/promo", h_promo)
     r.add_post("/api/upgrade", h_upgrade)
+    r.add_post("/api/mines/start", h_mines_start)
+    r.add_post("/api/mines/open", h_mines_open)
+    r.add_post("/api/mines/cashout", h_mines_cashout)
     r.add_post("/api/tasks/claim", h_tasks_claim)
     r.add_post("/api/invoice", h_invoice)
     r.add_post("/api/withdraw", h_withdraw)
     r.add_get("/api/avatar/{uid}", h_avatar)
+    site = Path(config.WEBAPP_DIR) if config.WEBAPP_DIR else None
+    if site and (site / "index.html").exists():
+        # сайт и API на одном домене — самый надёжный вариант, CORS не нужен
+        r.add_get("/", lambda _: web.FileResponse(site / "index.html"))
+        r.add_static("/", site, show_index=False)
+        log.info("Раздаю сайт из %s", site)
+    else:
+        r.add_get("/", h_root)
     return app
 
 
@@ -395,7 +442,7 @@ async def main() -> None:
     if not config.BOT_TOKEN:
         raise SystemExit("Укажи BOT_TOKEN (в .env или в панели хостинга)")
     if not config.WEBAPP_URL.startswith("https://"):
-        raise SystemExit("Укажи WEBAPP_URL — адрес сайта на GitHub Pages, например https://ник.github.io/voidplay-webapp/")
+        raise SystemExit("Укажи WEBAPP_URL — адрес сайта (https://...), например https://yaroslav-commits.github.io/voidplayfiles/")
 
     game = Game(DB(config.DB_PATH))
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))

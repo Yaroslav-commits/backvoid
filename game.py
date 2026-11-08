@@ -124,6 +124,16 @@ CREATE TABLE IF NOT EXISTS promo_uses (
   PRIMARY KEY (user_id, code)
 );
 
+-- активная игра в Мины (одна на игрока). board/opened — JSON-списки клеток
+CREATE TABLE IF NOT EXISTS mines (
+  user_id INTEGER PRIMARY KEY,
+  stake   INTEGER NOT NULL,
+  mines   INTEGER NOT NULL,
+  board   TEXT NOT NULL,
+  opened  TEXT NOT NULL,
+  created INTEGER NOT NULL
+);
+
 -- id платежей Telegram, чтобы не зачислить дважды
 CREATE TABLE IF NOT EXISTS payments (
   charge_id TEXT PRIMARY KEY,
@@ -241,7 +251,7 @@ class Game:
 
     # ---------------- состояние для фронта ----------------
     def gift_view(self, gift_id: str, uid: str | None = None) -> dict:
-        g = BY_ID.get(gift_id) or {"id": gift_id, "name": gift_id, "price": 0, "img": "assets/img/placeholder.svg"}
+        g = BY_ID.get(gift_id) or {"id": gift_id, "name": gift_id, "price": 0, "img": f"img/gifts/{gift_id}.webp"}
         return {**g, "uid": uid} if uid else dict(g)
 
     def inventory(self, uid: int) -> list[dict]:
@@ -312,11 +322,13 @@ class Game:
             "catalog": CATALOG,
             "packs": PACKS,
             "levels": LEVELS,
+            "mines": self.mines_state(uid),
             "rates": {"usdToStars": 50, "tonToStars": 120},
             "config": {
                 "channelUrl": config.CHANNEL_URL, "supportUrl": config.SUPPORT_URL, "giftsAccount": config.GIFTS_ACCOUNT,
                 "subscribeReward": config.SUBSCRIBE_REWARD, "minWithdraw": config.MIN_WITHDRAW,
                 "houseEdge": config.HOUSE_EDGE, "maxChance": config.MAX_CHANCE,
+                "minesEdge": config.MINES_EDGE, "minBet": config.MIN_BET, "appName": config.APP_NAME,
             },
         }
 
@@ -420,6 +432,91 @@ class Game:
                 self._add_tx(uid, "win", target["price"], game="Апгрейдер", item="nft", gift_id=target_id)
         return {"win": win, "chance": ch, "roll": roll, "balance": self.balance(uid), "inventory": self.inventory(uid)}
 
+    # ---------------- мины ----------------
+    CELLS = 25
+
+    @staticmethod
+    def mines_mult(mines: int, opened: int) -> float:
+        """Честный множитель (обратная вероятность) минус комиссия MINES_EDGE."""
+        if opened <= 0:
+            return 1.0
+        m = 1.0
+        for i in range(opened):
+            m *= (Game.CELLS - i) / (Game.CELLS - mines - i)
+        return round(m * (1 - config.MINES_EDGE), 2)
+
+    def _mines_row(self, uid: int):
+        return self.db.one("SELECT * FROM mines WHERE user_id=?", (uid,))
+
+    def _mines_view(self, row) -> dict | None:
+        if not row:
+            return None
+        opened = json.loads(row["opened"])
+        k = len(opened)
+        return {
+            "stake": row["stake"], "mines": row["mines"], "opened": opened,
+            "mult": self.mines_mult(row["mines"], k),
+            "next": self.mines_mult(row["mines"], k + 1) if k < self.CELLS - row["mines"] else None,
+        }
+
+    def mines_state(self, uid: int) -> dict | None:
+        return self._mines_view(self._mines_row(uid))
+
+    def mines_start(self, uid: int, stake: int, mines: int) -> dict:
+        stake, mines = int(stake), int(mines)
+        if stake < config.MIN_BET or not 1 <= mines <= self.CELLS - 1:
+            raise GameError("bad_amount")
+        with self.db.tx():
+            self.user(uid)
+            if self._mines_row(uid):
+                raise GameError("already")
+            self._change_balance(uid, -stake)
+            self._add_tx(uid, "fee", stake, game="Мины", item="stars")
+            cells = list(range(self.CELLS))
+            board = []
+            for _ in range(mines):  # криптостойкий выбор клеток с минами
+                board.append(cells.pop(secrets.randbelow(len(cells))))
+            self.db.run("INSERT INTO mines (user_id, stake, mines, board, opened, created) VALUES (?,?,?,?,?,?)",
+                        (uid, stake, mines, json.dumps(sorted(board)), "[]", now()))
+            return self.mines_state(uid)
+
+    def _mines_finish(self, uid: int, row, opened: list[int]) -> dict:
+        mult = self.mines_mult(row["mines"], len(opened))
+        win = int(row["stake"] * mult)
+        self.db.run("DELETE FROM mines WHERE user_id=?", (uid,))
+        self._change_balance(uid, win)
+        self._add_tx(uid, "win", win, game="Мины", item="stars")
+        return {"win": win, "mult": mult, "board": json.loads(row["board"]), "game": None}
+
+    def mines_open(self, uid: int, cell: int) -> dict:
+        cell = int(cell)
+        if not 0 <= cell < self.CELLS:
+            raise GameError("bad_amount")
+        with self.db.tx():
+            row = self._mines_row(uid)
+            if not row:
+                raise GameError("not_found")
+            board, opened = json.loads(row["board"]), json.loads(row["opened"])
+            if cell in board:
+                self.db.run("DELETE FROM mines WHERE user_id=?", (uid,))
+                return {"boom": True, "cell": cell, "board": board, "game": None}
+            if cell not in opened:
+                opened.append(cell)
+            if len(opened) >= self.CELLS - row["mines"]:
+                return {"boom": False, "cell": cell, **self._mines_finish(uid, row, opened)}
+            self.db.run("UPDATE mines SET opened=? WHERE user_id=?", (json.dumps(opened), uid))
+            return {"boom": False, "cell": cell, "game": self.mines_state(uid)}
+
+    def mines_cashout(self, uid: int) -> dict:
+        with self.db.tx():
+            row = self._mines_row(uid)
+            if not row:
+                raise GameError("not_found")
+            opened = json.loads(row["opened"])
+            if not opened:
+                raise GameError("not_ready")
+            return self._mines_finish(uid, row, opened)
+
     # ---------------- пополнение / вывод ----------------
     def credit_deposit(self, uid: int, amount: int, charge_id: str, bonus: int = 0) -> bool:
         """Зачислить оплату Stars. Возвращает False, если платёж уже был зачислен."""
@@ -448,10 +545,11 @@ class Game:
 
     # ---------------- лента, лидеры ----------------
     def feed(self, limit: int = 20) -> list[dict]:
-        rows = self.db.q("SELECT t.id AS tid, t.amount AS tamount, t.gift_id AS tgift, t.created AS tcreated, u.* "
+        rows = self.db.q("SELECT t.id AS tid, t.amount AS tamount, t.gift_id AS tgift, t.game AS tgame, t.created AS tcreated, u.* "
                          "FROM transactions t JOIN users u ON u.id=t.user_id "
                          "WHERE t.type='win' ORDER BY t.id DESC LIMIT ?", (limit,))
-        return [{"id": r["tid"], "price": r["tamount"], "gift": self.gift_view(r["tgift"]), "date": r["tcreated"] * 1000,
+        return [{"id": r["tid"], "price": r["tamount"], "game": r["tgame"],
+                 "gift": self.gift_view(r["tgift"]) if r["tgift"] else None, "date": r["tcreated"] * 1000,
                  "user": self.public_user(r)} for r in rows]
 
     def leaders(self, limit: int = 50) -> dict:

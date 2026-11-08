@@ -21,12 +21,18 @@ def _ints(v: str) -> list[int]:
     return [int(x) for x in v.replace(" ", "").split(",") if x.strip().lstrip("-").isdigit()]
 
 
+# Название проекта — меняется в одном месте (бот, сайт берёт его с сервера)
+APP_NAME = os.getenv("APP_NAME", "Void Play")
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 # Где открывается Web App (GitHub Pages или этот же домен)
 WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
+# Папка с сайтом (необязательно). Если указать — бот сам раздаёт сайт на своём домене
+# и CORS вообще не нужен: WEBAPP_URL = https://<домен-бота>/
+WEBAPP_DIR = os.getenv("WEBAPP_DIR", "")
 # С каких сайтов можно ходить в API (GitHub Pages и т.п.). * — с любых
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
@@ -52,6 +58,7 @@ MIN_WITHDRAW = int(os.getenv("MIN_WITHDRAW", "100"))
 HOUSE_EDGE = float(os.getenv("HOUSE_EDGE", "0.10"))       # комиссия апгрейдера
 MAX_CHANCE = float(os.getenv("MAX_CHANCE", "0.75"))       # максимальный шанс апгрейда
 MIN_BET = int(os.getenv("MIN_BET", "1"))
+MINES_EDGE = float(os.getenv("MINES_EDGE", "0.03"))       # комиссия в Минах
 
 # Разработка: принимать запросы без подписи Telegram (только для локальных тестов!)
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
@@ -59,7 +66,7 @@ DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 
 # =====================================================================
 #  Каталог NFT (цены в звёздах, 1 ⭐ = 1 Telegram Star) — меняй как хочешь.
-#  Картинки лежат на сайте: img/<id>.png
+#  Картинки лежат на сайте: img/gifts/<id>.webp
 # =====================================================================
 
 
@@ -82,7 +89,7 @@ GIFTS = [
     ("gift-120", "NFT #120", 150),
 ]
 
-CATALOG = [{"id": i, "name": n, "price": p, "img": f"img/{i}.png"} for i, n, p in GIFTS]
+CATALOG = [{"id": i, "name": n, "price": p, "img": f"img/gifts/{i}.webp"} for i, n, p in GIFTS]
 BY_ID = {g["id"]: g for g in CATALOG}
 
 # Выгодные пакеты пополнения: сколько звёзд платишь → бонус сверху (0 — без бонуса)
