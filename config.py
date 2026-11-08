@@ -49,6 +49,8 @@ GIFTS_ACCOUNT = os.getenv("GIFTS_ACCOUNT", "@nersew")
 ADMIN_IDS = [6378471773]
 
 # Экономика (1 звезда в игре = 1 Telegram Star)
+# «Первый заработок без вложений»: новичок сразу получает стартовые звёзды
+WELCOME_BONUS = int(os.getenv("WELCOME_BONUS", "10"))
 SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "15"))
 DAILY_REWARD = int(os.getenv("DAILY_REWARD", "5"))
 REF_PERCENT = int(os.getenv("REF_PERCENT", "5"))          # % с пополнений приглашённых
@@ -93,7 +95,7 @@ PACKS = [
 
 # Задания. kind — чем меряется прогресс (см. game.task_progress)
 TASKS = [
-    {"id": "bets5", "title": "Сделай 5 ставок", "text": "Сыграй 5 раз в апгрейдере", "kind": "bets", "goal": 5, "reward": 10},
+    {"id": "bets5", "title": "Сделай 5 ставок", "text": "Сыграй 5 раз в любой игре — хоть по 1 ⭐", "kind": "bets", "goal": 5, "reward": 10},
     {"id": "sub", "title": "Подписка", "text": "Подпишись на канал Void Play", "kind": "subscribed", "goal": 1, "reward": 5},
     {"id": "dep1", "title": "Первое пополнение", "text": "Пополни баланс на любую сумму", "kind": "deposits", "goal": 1, "reward": 20},
     {"id": "ref3", "title": "Пригласи друзей", "text": "Пригласи 3 друзей по своей ссылке", "kind": "referrals", "goal": 3, "reward": 50},

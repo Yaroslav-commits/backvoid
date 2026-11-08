@@ -231,8 +231,14 @@ class Game:
                     referrer = r
             except ValueError:
                 pass
-        self.db.run("INSERT INTO users (id, username, first_name, last_name, photo_url, lang, referrer, created, seen) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)", (uid, *fields, referrer, now(), now()))
+        with self.db.tx():
+            if self.db.one("SELECT 1 FROM users WHERE id=?", (uid,)):  # параллельный запрос уже создал игрока
+                return dict(self.db.one("SELECT * FROM users WHERE id=?", (uid,))), False
+            self.db.run("INSERT INTO users (id, username, first_name, last_name, photo_url, lang, referrer, created, seen) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)", (uid, *fields, referrer, now(), now()))
+            if config.WELCOME_BONUS > 0:  # стартовые звёзды — играть можно без пополнения
+                self._change_balance(uid, config.WELCOME_BONUS)
+                self._add_tx(uid, "bonus", config.WELCOME_BONUS, item="welcome")
         return dict(self.db.one("SELECT * FROM users WHERE id=?", (uid,))), True
 
     def user(self, uid: int) -> dict:
@@ -314,6 +320,7 @@ class Game:
             "user": {**self.public_user(u), "photo": u["photo_url"] or ""},
             "balance": {"stars": u["balance"]},
             "subscribed": bool(u["subscribed"]),
+            "daily": {"ready": u["last_daily"] != datetime.now(timezone.utc).strftime("%Y-%m-%d"), "reward": config.DAILY_REWARD},
             "wallet": u["wallet"],
             "inventory": self.inventory(uid),
             "transactions": self.transactions(uid),
@@ -328,6 +335,7 @@ class Game:
                 "channelUrl": config.CHANNEL_URL, "supportUrl": config.SUPPORT_URL, "giftsAccount": config.GIFTS_ACCOUNT,
                 "subscribeReward": config.SUBSCRIBE_REWARD, "minWithdraw": config.MIN_WITHDRAW,
                 "houseEdge": config.HOUSE_EDGE, "maxChance": config.MAX_CHANCE,
+                "welcomeBonus": config.WELCOME_BONUS, "dailyReward": config.DAILY_REWARD,
                 "minesEdge": config.MINES_EDGE, "minBet": config.MIN_BET, "appName": config.APP_NAME,
             },
         }
