@@ -26,7 +26,7 @@ APP_NAME = os.getenv("APP_NAME", "Void Play")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 # Где открывается Web App (GitHub Pages или этот же домен)
-WEBAPP_URL = os.getenv("WEBAPP_URL", "")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://yaroslav-commits.github.io/voidplayfiles/")
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
@@ -42,11 +42,11 @@ AVATAR_DIR = Path(os.getenv("AVATAR_DIR", ROOT / "avatars"))
 # Канал для задания «подпишись». Бот должен быть админом канала
 CHANNEL = os.getenv("CHANNEL", "@testkanalbot")
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/testkanalbot")
-SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/Hanoru")
-GIFTS_ACCOUNT = os.getenv("GIFTS_ACCOUNT", "@voidplay")
+SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/nersew")
+GIFTS_ACCOUNT = os.getenv("GIFTS_ACCOUNT", "@nersew")
 
 # Админы бота (Telegram id), записаны прямо в коде
-ADMIN_IDS = [6378471773, 6883630937]
+ADMIN_IDS = [6378471773]
 
 # Экономика (1 звезда в игре = 1 Telegram Star)
 SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "15"))
@@ -63,14 +63,6 @@ MINES_EDGE = float(os.getenv("MINES_EDGE", "0.03"))       # комиссия в 
 # Разработка: принимать запросы без подписи Telegram (только для локальных тестов!)
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 
-
-# =====================================================================
-#  Каталог NFT (цены в звёздах, 1 ⭐ = 1 Telegram Star) — меняй как хочешь.
-#  Картинки лежат на сайте: img/gifts/<id>.webp
-# =====================================================================
-
-
-# id, название, цена в звёздах
 GIFTS = [
     ("pepe", "Plush Pepe", 4999),
     ("gift-126", "NFT #126", 3500),
