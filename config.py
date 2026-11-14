@@ -90,7 +90,7 @@ GIFT_MAX_PRICE = int(os.getenv("GIFT_MAX_PRICE", "0"))           # 0 — без 
 # Адрес твоего TON-кошелька, куда приходят пополнения. Пусто — оплата TON выключена
 TON_WALLET = os.getenv("TON_WALLET", "UQDSyfkCHWx7UZ40fJ9L2ZCL1tWFH0Kjf0wCau-mXVNTILhz")
 TONCENTER_KEY = os.getenv("TONCENTER_KEY", "")           # необязательно: ключ toncenter.com (без него тоже работает)
-STAR_USD = float(os.getenv("STAR_USD", "0.02"))          # сколько $ стоит 1 звезда при пополнении в TON
+STAR_USD = float(os.getenv("STAR_USD", "0.03"))          # сколько $ стоит 1 звезда при пополнении в TON
 TON_FEE = float(os.getenv("TON_FEE", "0"))               # твоя комиссия с пополнений в TON (0.05 = 5%)
 TON_USD = float(os.getenv("TON_USD", "0"))               # запасной курс TON в $, если биржа не отвечает (0 — нет)
 TON_MIN_STARS = int(os.getenv("TON_MIN_STARS", "50"))    # минимальное пополнение в TON, в звёздах
