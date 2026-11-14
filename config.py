@@ -38,6 +38,7 @@ ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",
 
 DB_PATH = Path(os.getenv("DB_PATH", ROOT / "voidplay.db"))
 AVATAR_DIR = Path(os.getenv("AVATAR_DIR", ROOT / "avatars"))
+GIFT_DIR = Path(os.getenv("GIFT_DIR", ROOT / "gift_images"))   # кэш картинок подарков из Telegram
 
 # Канал для задания «подпишись». Бот должен быть админом канала
 CHANNEL = os.getenv("CHANNEL", "@testkanalbot")
@@ -61,6 +62,39 @@ HOUSE_EDGE = float(os.getenv("HOUSE_EDGE", "0.10"))       # комиссия а�
 MAX_CHANCE = float(os.getenv("MAX_CHANCE", "0.75"))       # максимальный шанс апгрейда
 MIN_BET = int(os.getenv("MIN_BET", "1"))
 MINES_EDGE = float(os.getenv("MINES_EDGE", "0.03"))       # комиссия в Минах
+# Апгрейдер: ставка не больше этой доли от цены цели (0.8 → за подарок в 1000 ⭐ максимум 800 ⭐),
+# чтобы не было апгрейдов «x1 и ниже»
+UPGRADE_MAX_RATIO = float(os.getenv("UPGRADE_MAX_RATIO", "0.8"))
+
+# ---------- PvP (Рулетка, Огонь и лёд) ----------
+# Комиссия берётся только с выигрыша (со ставок проигравших) — победитель никогда не уходит в минус
+PVP_FEE = float(os.getenv("PVP_FEE", "0.10"))
+PVP_ROUND_SECONDS = int(os.getenv("PVP_ROUND_SECONDS", "20"))   # таймер раунда после входа второго игрока
+PVP_SHOW_SECONDS = int(os.getenv("PVP_SHOW_SECONDS", "9"))      # сколько показываем результат до нового раунда
+PVP_MIN_BET = int(os.getenv("PVP_MIN_BET", "1"))
+PVP_MAX_BET = int(os.getenv("PVP_MAX_BET", "50000"))
+PVP_MAX_PLAYERS = int(os.getenv("PVP_MAX_PLAYERS", "30"))
+
+# ---------- Цены подарков ----------
+# telegram — каталог и цены сами подтягиваются из Telegram (официальный список подарков и их цены в звёздах),
+#            список GIFTS ниже нужен только как запасной, пока Telegram не ответил
+# manual   — только список GIFTS ниже
+GIFTS_SOURCE = os.getenv("GIFTS_SOURCE", "telegram")
+GIFTS_SYNC_MINUTES = int(os.getenv("GIFTS_SYNC_MINUTES", "30"))  # как часто обновлять цены
+GIFT_MIN_PRICE = int(os.getenv("GIFT_MIN_PRICE", "0"))           # не показывать подарки дешевле / дороже
+GIFT_MAX_PRICE = int(os.getenv("GIFT_MAX_PRICE", "0"))           # 0 — без ограничения
+
+# ---------- Пополнение в TON ----------
+# Адрес твоего TON-кошелька, куда приходят пополнения. Пусто — оплата TON выключена
+TON_WALLET = os.getenv("TON_WALLET", "")
+TONCENTER_KEY = os.getenv("TONCENTER_KEY", "")           # необязательно: ключ toncenter.com (без него тоже работает)
+STAR_USD = float(os.getenv("STAR_USD", "0.02"))          # сколько $ стоит 1 звезда при пополнении в TON
+TON_FEE = float(os.getenv("TON_FEE", "0"))               # твоя комиссия с пополнений в TON (0.05 = 5%)
+TON_USD = float(os.getenv("TON_USD", "0"))               # запасной курс TON в $, если биржа не отвечает (0 — нет)
+TON_MIN_STARS = int(os.getenv("TON_MIN_STARS", "50"))    # минимальное пополнение в TON, в звёздах
+
+# Игры, которые можно открывать/закрывать из бота: /games
+GAMES = {"upgrade": "Апгрейдер", "mines": "Мины", "roulette": "PvP Рулетка", "fireice": "PvP Огонь и лёд"}
 
 # Разработка: принимать запросы без подписи Telegram (только для локальных тестов!)
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"

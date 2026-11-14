@@ -14,7 +14,8 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
 
 import config
-from config import BY_ID, CATALOG, LEVELS, PACKS, TASKS, level_for
+from config import LEVELS, PACKS, TASKS, level_for
+from pvp import PvpMixin
 
 
 # =====================================================================
@@ -134,6 +135,74 @@ CREATE TABLE IF NOT EXISTS mines (
   created INTEGER NOT NULL
 );
 
+-- настройки, которые меняются из бота (например, закрытые игры: game:mines = 0)
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- каталог подарков, подтянутый из Telegram (цены обновляются сами)
+CREATE TABLE IF NOT EXISTS gift_prices (
+  id      TEXT PRIMARY KEY,
+  name    TEXT NOT NULL,
+  price   INTEGER NOT NULL,
+  emoji   TEXT,
+  file_id TEXT,
+  extra   TEXT,
+  active  INTEGER NOT NULL DEFAULT 1,
+  updated INTEGER NOT NULL
+);
+
+-- PvP-раунды: status open → done. winner — id игрока (рулетка) или сторона (огонь и лёд)
+CREATE TABLE IF NOT EXISTS pvp_rounds (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  game        TEXT NOT NULL,
+  status      TEXT NOT NULL,
+  seed        TEXT NOT NULL,
+  hash        TEXT NOT NULL,
+  created     INTEGER NOT NULL,
+  ends_at     INTEGER,
+  resolved_at INTEGER,
+  winner      TEXT,
+  win_chance  REAL,
+  roll        REAL,
+  pot         INTEGER NOT NULL DEFAULT 0,
+  fee         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS pvp_game ON pvp_rounds(game, id);
+CREATE TABLE IF NOT EXISTS pvp_bets (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_id INTEGER NOT NULL,
+  user_id  INTEGER NOT NULL,
+  side     TEXT,
+  amount   INTEGER NOT NULL,
+  payout   INTEGER NOT NULL DEFAULT 0,
+  created  INTEGER NOT NULL,
+  UNIQUE (round_id, user_id)
+);
+
+-- заработок проекта: комиссии PvP
+CREATE TABLE IF NOT EXISTS house (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  game    TEXT NOT NULL,
+  amount  INTEGER NOT NULL,
+  created INTEGER NOT NULL
+);
+
+-- счета на пополнение в TON: игрок переводит TON с комментарием comment
+CREATE TABLE IF NOT EXISTS ton_deposits (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  stars   INTEGER NOT NULL,
+  nano    INTEGER NOT NULL,
+  rate    REAL NOT NULL,
+  comment TEXT UNIQUE,
+  status  TEXT NOT NULL,
+  tx_hash TEXT,
+  credited INTEGER NOT NULL DEFAULT 0,
+  created INTEGER NOT NULL
+);
+
 -- id платежей Telegram, чтобы не зачислить дважды
 CREATE TABLE IF NOT EXISTS payments (
   charge_id TEXT PRIMARY KEY,
@@ -209,9 +278,63 @@ def season_bounds(ts: int | None = None) -> tuple[int, int]:
     return int(start.timestamp()), int(end.timestamp())
 
 
-class Game:
+class Game(PvpMixin):
     def __init__(self, db: DB):
         self.db = db
+        self.closed: set[str] = {r["key"][5:] for r in db.q("SELECT key FROM settings WHERE key LIKE 'game:%' AND value='0'")}
+        self.catalog: list[dict] = []
+        self.by_id: dict[str, dict] = {}
+        self.load_gifts()
+
+    # ---------------- каталог подарков ----------------
+    def load_gifts(self):
+        """Каталог = подарки из Telegram (если уже подтянулись), иначе список из config.GIFTS."""
+        manual = {g["id"]: g for g in config.CATALOG}
+        synced = []
+        if config.GIFTS_SOURCE == "telegram":
+            for r in self.db.q("SELECT * FROM gift_prices ORDER BY price DESC, id"):
+                extra = json.loads(r["extra"] or "{}")
+                g = {"id": r["id"], "name": r["name"], "price": r["price"], "img": f"/api/gift/{r['id']}",
+                     "limited": bool(extra.get("limited"))}
+                manual[r["id"]] = g  # старые подарки из инвентаря остаются с последней известной ценой
+                lo, hi = config.GIFT_MIN_PRICE, config.GIFT_MAX_PRICE
+                if r["active"] and r["price"] >= max(1, lo) and (not hi or r["price"] <= hi):
+                    synced.append(g)
+        self.by_id = manual
+        self.catalog = synced or list(config.CATALOG)
+
+    def set_gifts(self, gifts: list[dict]) -> int:
+        """Сохранить свежий список из Telegram: [{id, name, price, emoji, file_id, limited}]."""
+        if not gifts:
+            return 0
+        with self.db.tx():
+            self.db.run("UPDATE gift_prices SET active=0")
+            for g in gifts:
+                self.db.run(
+                    "INSERT INTO gift_prices (id, name, price, emoji, file_id, extra, active, updated) VALUES (?,?,?,?,?,?,1,?) "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, price=excluded.price, emoji=excluded.emoji, "
+                    "file_id=COALESCE(excluded.file_id, file_id), extra=excluded.extra, active=1, updated=excluded.updated",
+                    (g["id"], g["name"], int(g["price"]), g.get("emoji"), g.get("file_id"),
+                     json.dumps({"limited": bool(g.get("limited"))}), now()))
+        self.load_gifts()
+        return len(gifts)
+
+    # ---------------- открытые / закрытые игры ----------------
+    def game_open(self, game: str) -> bool:
+        return game not in self.closed
+
+    def set_game(self, game: str, is_open: bool):
+        if game not in config.GAMES:
+            raise GameError("not_found")
+        self.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (f"game:{game}", "1" if is_open else "0"))
+        (self.closed.discard if is_open else self.closed.add)(game)
+
+    def require_open(self, game: str):
+        if not self.game_open(game):
+            raise GameError("closed")
+
+    def games(self) -> dict:
+        return {g: self.game_open(g) for g in config.GAMES}
 
     # ---------------- пользователи ----------------
     def upsert_user(self, tg: dict, start_param: str | None = None) -> tuple[dict, bool]:
@@ -257,7 +380,7 @@ class Game:
 
     # ---------------- состояние для фронта ----------------
     def gift_view(self, gift_id: str, uid: str | None = None) -> dict:
-        g = BY_ID.get(gift_id) or {"id": gift_id, "name": gift_id, "price": 0, "img": f"img/gifts/{gift_id}.webp"}
+        g = self.by_id.get(gift_id) or {"id": gift_id, "name": gift_id, "price": 0, "img": f"img/gifts/{gift_id}.webp"}
         return {**g, "uid": uid} if uid else dict(g)
 
     def inventory(self, uid: int) -> list[dict]:
@@ -274,7 +397,7 @@ class Game:
                 "type": t,
                 "amount": r["amount"], "currency": r["currency"] or "STARS",
                 "game": r["game"], "item": r["item"] if t in ("fee", "win") else None,
-                "nft": BY_ID[r["gift_id"]]["img"] if r["gift_id"] in BY_ID else None,
+                "nft": self.by_id[r["gift_id"]]["img"] if r["gift_id"] in self.by_id else None,
                 "status": r["status"], "date": r["created"] * 1000,
             })
         return out
@@ -326,7 +449,8 @@ class Game:
             "transactions": self.transactions(uid),
             "referrals": self.referrals(uid),
             "tasks": self.tasks(uid),
-            "catalog": CATALOG,
+            "catalog": self.catalog,
+            "games": self.games(),
             "packs": PACKS,
             "levels": LEVELS,
             "mines": self.mines_state(uid),
@@ -334,7 +458,8 @@ class Game:
             "config": {
                 "channelUrl": config.CHANNEL_URL, "supportUrl": config.SUPPORT_URL, "giftsAccount": config.GIFTS_ACCOUNT,
                 "subscribeReward": config.SUBSCRIBE_REWARD, "minWithdraw": config.MIN_WITHDRAW,
-                "houseEdge": config.HOUSE_EDGE, "maxChance": config.MAX_CHANCE,
+                "houseEdge": config.HOUSE_EDGE, "maxChance": config.MAX_CHANCE, "upgradeMaxRatio": config.UPGRADE_MAX_RATIO,
+                "pvpFee": config.PVP_FEE, "pvpMinBet": config.PVP_MIN_BET, "pvpMaxBet": config.PVP_MAX_BET,
                 "welcomeBonus": config.WELCOME_BONUS, "dailyReward": config.DAILY_REWARD,
                 "minesEdge": config.MINES_EDGE, "minBet": config.MIN_BET, "appName": config.APP_NAME,
             },
@@ -413,22 +538,31 @@ class Game:
         return max(0.0001, min(config.MAX_CHANCE, stake / price * (1 - config.HOUSE_EDGE)))
 
     def upgrade(self, uid: int, target_id: str, stake: int = 0, gift_uid: str | None = None) -> dict:
-        target = BY_ID.get(target_id)
-        if not target:
+        target = self.by_id.get(target_id)
+        if not target or target["price"] <= 0:
             raise GameError("not_found")
+        self.require_open("upgrade")
+        # ставка не больше UPGRADE_MAX_RATIO от цены цели — апгрейд всегда даёт больше, чем поставил
+        max_stake = int(target["price"] * config.UPGRADE_MAX_RATIO)
         with self.db.tx():
             self.user(uid)
             if gift_uid:
                 g = self.db.one("SELECT * FROM inventory WHERE uid=? AND user_id=?", (gift_uid, uid))
                 if not g:
                     raise GameError("not_found")
-                value = BY_ID.get(g["gift_id"], {"price": 0})["price"]
+                value = self.by_id.get(g["gift_id"], {"price": 0})["price"]
+                if value <= 0:
+                    raise GameError("bad_amount")
+                if value > max_stake:
+                    raise GameError("stake_too_big")
                 self.db.run("DELETE FROM inventory WHERE uid=?", (gift_uid,))
                 self._add_tx(uid, "fee", value, game="Апгрейдер", item="nft", gift_id=g["gift_id"])
             else:
                 value = int(stake)
                 if value < config.MIN_BET:
                     raise GameError("bad_amount")
+                if value > max_stake:
+                    raise GameError("stake_too_big")
                 self._change_balance(uid, -value)
                 self._add_tx(uid, "fee", value, game="Апгрейдер", item="stars")
             ch = self.chance(value, target["price"])
@@ -474,6 +608,7 @@ class Game:
         stake, mines = int(stake), int(mines)
         if stake < config.MIN_BET or not 1 <= mines <= self.CELLS - 1:
             raise GameError("bad_amount")
+        self.require_open("mines")
         with self.db.tx():
             self.user(uid)
             if self._mines_row(uid):
@@ -526,15 +661,15 @@ class Game:
             return self._mines_finish(uid, row, opened)
 
     # ---------------- пополнение / вывод ----------------
-    def credit_deposit(self, uid: int, amount: int, charge_id: str, bonus: int = 0) -> bool:
-        """Зачислить оплату Stars. Возвращает False, если платёж уже был зачислен."""
+    def credit_deposit(self, uid: int, amount: int, charge_id: str, bonus: int = 0, currency: str = "STARS") -> bool:
+        """Зачислить пополнение (Stars или TON). Возвращает False, если платёж уже был зачислен."""
         with self.db.tx():
             if self.db.one("SELECT 1 FROM payments WHERE charge_id=?", (charge_id,)):
                 return False
             self.db.run("INSERT INTO payments (charge_id, user_id, amount, created) VALUES (?,?,?,?)", (charge_id, uid, amount, now()))
             first = not self.db.one("SELECT 1 FROM transactions WHERE user_id=? AND type='dep'", (uid,))
             self._change_balance(uid, amount + bonus)
-            self._add_tx(uid, "dep", amount + bonus, currency="STARS", extra=charge_id)
+            self._add_tx(uid, "dep", amount + bonus, currency=currency, extra=charge_id)
             u = self.user(uid)
             if u["referrer"]:
                 ref = self.referrals(u["referrer"])
@@ -543,6 +678,41 @@ class Game:
                     self._change_balance(u["referrer"], share)
                     self._add_tx(u["referrer"], "ref", share, item=str(uid))
         return True
+
+    # ---------------- пополнение в TON ----------------
+    def ton_create(self, uid: int, stars: int, stars_per_ton: float) -> dict:
+        """Счёт на пополнение: сколько TON перевести и с каким комментарием."""
+        stars = int(stars)
+        if stars < config.TON_MIN_STARS or stars > 1_000_000 or stars_per_ton <= 0:
+            raise GameError("bad_amount")
+        self.user(uid)
+        nano = -(-int(stars / stars_per_ton * 1e9) // 1_000_000) * 1_000_000  # вверх до 0.001 TON
+        with self.db.tx():
+            dep_id = self.db.run("INSERT INTO ton_deposits (user_id, stars, nano, rate, status, created) VALUES (?,?,?,?,?,?)",
+                                 (uid, stars, nano, stars_per_ton, "pending", now()))
+            comment = f"VP{dep_id}"
+            self.db.run("UPDATE ton_deposits SET comment=? WHERE id=?", (comment, dep_id))
+        return {"id": dep_id, "stars": stars, "nano": nano, "comment": comment}
+
+    def ton_pending(self, max_age: int = 86400) -> list[dict]:
+        return [dict(r) for r in self.db.q("SELECT * FROM ton_deposits WHERE status='pending' AND created>=?", (now() - max_age,))]
+
+    def ton_credit(self, comment: str, nano: int, tx_hash: str) -> tuple[int, int] | None:
+        """Пришёл перевод TON с комментарием. Зачисляем по курсу счёта. → (id игрока, звёзд) или None."""
+        dep = self.db.one("SELECT * FROM ton_deposits WHERE comment=?", (comment.strip().upper(),))
+        if not dep or nano <= 0:
+            return None
+        stars = int(nano / 1e9 * dep["rate"] + 1e-6)
+        if stars <= 0 or not self.credit_deposit(dep["user_id"], stars, f"ton:{tx_hash}", currency="TON"):
+            return None
+        self.db.run("UPDATE ton_deposits SET status='paid', tx_hash=?, credited=credited+? WHERE id=?", (tx_hash, stars, dep["id"]))
+        return dep["user_id"], stars
+
+    def ton_status(self, uid: int, dep_id: int) -> dict:
+        dep = self.db.one("SELECT * FROM ton_deposits WHERE id=? AND user_id=?", (int(dep_id), uid))
+        if not dep:
+            raise GameError("not_found")
+        return {"status": dep["status"], "credited": dep["credited"]}
 
     def withdraw(self, uid: int, amount: int, method: str = "stars") -> int:
         if amount < config.MIN_WITHDRAW:
@@ -582,11 +752,11 @@ class Game:
             self._add_tx(uid, "bonus" if amount > 0 else "wd", abs(amount), item="admin")
 
     def admin_give_gift(self, uid: int, gift_id: str):
-        if gift_id not in BY_ID:
+        if gift_id not in self.by_id:
             raise GameError("not_found")
         self.user(uid)
         self.db.run("INSERT INTO inventory (uid, user_id, gift_id, created) VALUES (?,?,?,?)", (secrets.token_hex(8), uid, gift_id, now()))
-        self._add_tx(uid, "dep", BY_ID[gift_id]["price"], currency="NFT", gift_id=gift_id)
+        self._add_tx(uid, "dep", self.by_id[gift_id]["price"], currency="NFT", gift_id=gift_id)
 
     def admin_promo(self, code: str, reward: int, uses: int):
         self.db.run("INSERT OR REPLACE INTO promos (code, reward, uses_left) VALUES (?,?,?)", (code.strip().upper(), reward, uses))
