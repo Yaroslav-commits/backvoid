@@ -653,6 +653,8 @@ async def h_admin_act(request):
         game.set_floor(str(b.get("name") or ""), int(b.get("price") or 0))
     elif act == "game":
         game.set_game(str(b.get("game") or ""), bool(b.get("open")))
+    elif act == "lock":
+        game.admin_lock(str(b.get("id") or ""), bool(b.get("locked")))
     elif act == "sync":
         try:
             extra["added"] = await sync_stock(request)

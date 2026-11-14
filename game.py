@@ -366,11 +366,12 @@ class Game(PvpMixin):
         return True
 
     def shop(self, priced: bool = True) -> list[dict]:
+        """Склад. priced=False — для админки: вместе с подарками без цены и заблокированными (status='hold')."""
         out = []
-        for r in self.db.q("SELECT slug FROM nfts WHERE status='house'"):
+        for r in self.db.q("SELECT slug, status FROM nfts WHERE status='house'" + ("" if priced else " OR status='hold'")):
             v = self.nft_view(r["slug"])
             if v["price"] > 0 or not priced:
-                out.append({**v, "buy": int(v["price"] * (1 + config.SHOP_MARKUP))})
+                out.append({**v, "buy": int(v["price"] * (1 + config.SHOP_MARKUP)), "locked": r["status"] == "hold"})
         return sorted(out, key=lambda g: -g["price"])
 
     def target(self, gift_id: str) -> dict | None:
@@ -442,6 +443,13 @@ class Game(PvpMixin):
             raise GameError("not_found")
         return {**self.public_user(r), "balance": r["balance"], "banned": bool(r["banned"]), "gifts": len(self.inventory(r["id"])),
                 "deposits": self.db.one("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE user_id=?", (r["id"],))["s"]}
+
+    def admin_lock(self, gift_id: str, locked: bool):
+        """Заблокировать подарок на складе: его не купить в магазине и не выиграть в апгрейдере."""
+        n = self.db.run("UPDATE nfts SET status=? WHERE slug=? AND status=?",
+                        ("hold" if locked else "house", str(gift_id)[4:], "house" if locked else "hold"))
+        if not self.db.one("SELECT 1 FROM nfts WHERE slug=? AND status=?", (str(gift_id)[4:], "hold" if locked else "house")):
+            raise GameError("not_found")
 
     def admin_ban(self, uid: int, banned: bool):
         self.db.run("UPDATE users SET banned=? WHERE id=?", (1 if banned else 0, int(uid)))
