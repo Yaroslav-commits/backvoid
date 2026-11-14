@@ -43,6 +43,8 @@ class Services:
         self.tasks = [asyncio.create_task(self._loop(self._pvp_step, 1, "pvp"))]
         if config.GIFTS_SOURCE == "telegram" and self.bot:
             self.tasks.append(asyncio.create_task(self._loop(self.sync_gifts, config.GIFTS_SYNC_MINUTES * 60, "gifts")))
+        if config.NFT_FLOORS_URL:
+            self.tasks.append(asyncio.create_task(self._loop(self.sync_floors, config.NFT_FLOORS_MINUTES * 60, "nft floors")))
         if config.TON_WALLET:
             self.tasks.append(asyncio.create_task(self._loop(self.refresh_ton_rate, 300, "ton rate")))
             self.tasks.append(asyncio.create_task(self._loop(self._ton_step, 15, "ton")))
@@ -66,6 +68,31 @@ class Services:
     # =====================================================================
     #  PvP: разыгрываем раунды, даже если никто не смотрит на экран
     # =====================================================================
+    async def sync_floors(self) -> int:
+        """Флоры NFT-коллекций из NFT_FLOORS_URL → цены в звёздах."""
+        d = await self._get_json(config.NFT_FLOORS_URL)
+        if isinstance(d, dict) and len(d) == 1 and isinstance(next(iter(d.values())), (dict, list)):
+            d = next(iter(d.values()))   # {"data": {...}}
+        items = d.items() if isinstance(d, dict) else [(x.get("name") or x.get("collection") or x.get("title"), x) for x in d if isinstance(x, dict)]
+        k = 1.0
+        if config.NFT_FLOORS_UNIT == "ton":
+            if not await self.ton_usd():
+                await self.refresh_ton_rate()
+            k = await self.ton_usd() / config.STAR_USD
+        n = 0
+        for name, v in items:
+            if isinstance(v, dict):
+                v = next((v[f] for f in ("floor", "floor_price", "floorPrice", "price", "min_price") if v.get(f)), 0)
+            try:
+                price = int(float(v) * k)
+            except (TypeError, ValueError):
+                continue
+            if name and price > 0:
+                self.game.set_floor(name, price)
+                n += 1
+        log.info("цены NFT обновлены: %s коллекций", n)
+        return n
+
     async def _pvp_step(self):
         for g in PVP_GAMES:
             self.game.pvp_tick(g)

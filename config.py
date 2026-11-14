@@ -53,7 +53,7 @@ ADMIN_IDS = [6378471773]
 # «Первый заработок без вложений»: новичок сразу получает стартовые звёзды
 WELCOME_BONUS = int(os.getenv("WELCOME_BONUS", "10"))
 SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "15"))
-DAILY_REWARD = int(os.getenv("DAILY_REWARD", "5"))
+DAILY_REWARD = int(os.getenv("DAILY_REWARD", "2"))
 REF_PERCENT = int(os.getenv("REF_PERCENT", "5"))          # % с пополнений приглашённых
 REF_PER_FRIEND = int(os.getenv("REF_PER_FRIEND", "10"))    # бонус за первое пополнение друга
 MIN_DEPOSIT = int(os.getenv("MIN_DEPOSIT", "1"))
@@ -86,12 +86,21 @@ GIFT_MAX_PRICE = int(os.getenv("GIFT_MAX_PRICE", "0"))           # 0 — без 
 
 # ---------- Пополнение в TON ----------
 # Адрес твоего TON-кошелька, куда приходят пополнения. Пусто — оплата TON выключена
-TON_WALLET = os.getenv("TON_WALLET", "")
+TON_WALLET = os.getenv("TON_WALLET", "UQDSyfkCHWx7UZ40fJ9L2ZCL1tWFH0Kjf0wCau-mXVNTILhz")
 TONCENTER_KEY = os.getenv("TONCENTER_KEY", "")           # необязательно: ключ toncenter.com (без него тоже работает)
 STAR_USD = float(os.getenv("STAR_USD", "0.02"))          # сколько $ стоит 1 звезда при пополнении в TON
 TON_FEE = float(os.getenv("TON_FEE", "0"))               # твоя комиссия с пополнений в TON (0.05 = 5%)
 TON_USD = float(os.getenv("TON_USD", "0"))               # запасной курс TON в $, если биржа не отвечает (0 — нет)
 TON_MIN_STARS = int(os.getenv("TON_MIN_STARS", "50"))    # минимальное пополнение в TON, в звёздах
+
+# ---------- Вывод и NFT-подарки ----------
+WITHDRAW_FEE = float(os.getenv("WITHDRAW_FEE", "0.03"))            # твоя комиссия с любого вывода (0.03 = 3%)
+NFT_TRANSFER_STARS = int(os.getenv("NFT_TRANSFER_STARS", "25"))    # сколько звёзд Telegram берёт за передачу NFT (платит игрок)
+# Необязательно: адрес JSON с флорами коллекций ({"Plush Pepe": 1234.5, ...} или [{"name":..,"floor":..}]) — цены обновятся сами.
+# Без него цены задаются командой /floor
+NFT_FLOORS_URL = os.getenv("NFT_FLOORS_URL", "")
+NFT_FLOORS_UNIT = os.getenv("NFT_FLOORS_UNIT", "ton")              # в чём цены в этом JSON: ton или stars
+NFT_FLOORS_MINUTES = int(os.getenv("NFT_FLOORS_MINUTES", "30"))
 
 # Игры, которые можно открывать/закрывать из бота: /games
 GAMES = {"upgrade": "Апгрейдер", "mines": "Мины", "roulette": "PvP Рулетка", "fireice": "PvP Огонь и лёд"}
@@ -100,21 +109,21 @@ GAMES = {"upgrade": "Апгрейдер", "mines": "Мины", "roulette": "PvP 
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 
 GIFTS = [
-    ("pepe", "Plush Pepe", 4999),
-    ("gift-126", "NFT #126", 3500),
-    ("gift-128", "NFT #128", 2400),
-    ("gift-127", "NFT #127", 1800),
-    ("gift-129", "NFT #129", 1500),
-    ("gift-004", "NFT #004", 1200),
-    ("gift-074", "NFT #074", 999),
-    ("gift-090", "NFT #090", 850),
-    ("gift-020", "NFT #020", 700),
-    ("gift-065", "NFT #065", 560),
-    ("gift-023", "NFT #023", 450),
-    ("gift-047", "NFT #047", 350),
-    ("gift-132", "NFT #132", 280),
-    ("gift-103", "NFT #103", 200),
-    ("gift-120", "NFT #120", 150),
+    ("pepe", "Plush Pepe", 194999),
+    ("gift-126", "NFT #126", 6500),
+    ("gift-128", "NFT #128", 4400),
+    ("gift-127", "NFT #127", 2800),
+    ("gift-129", "NFT #129", 2500),
+    ("gift-004", "NFT #004", 2200),
+    ("gift-074", "NFT #074", 1999),
+    ("gift-090", "NFT #090", 1350),
+    ("gift-020", "NFT #020", 1200),
+    ("gift-065", "NFT #065", 1060),
+    ("gift-023", "NFT #023", 950),
+    ("gift-047", "NFT #047", 750),
+    ("gift-132", "NFT #132", 680),
+    ("gift-103", "NFT #103", 500),
+    ("gift-120", "NFT #120", 450),
 ]
 
 CATALOG = [{"id": i, "name": n, "price": p, "img": f"img/gifts/{i}.webp"} for i, n, p in GIFTS]

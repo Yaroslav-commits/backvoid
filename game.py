@@ -203,6 +203,29 @@ CREATE TABLE IF NOT EXISTS ton_deposits (
   created INTEGER NOT NULL
 );
 
+-- NFT-подарки, которые игроки передали аккаунту проекта. status: in (у игрока в инвентаре) | house | out (выведен)
+CREATE TABLE IF NOT EXISTS nfts (
+  slug     TEXT PRIMARY KEY,
+  base     TEXT NOT NULL,
+  number   INTEGER NOT NULL DEFAULT 0,
+  model    TEXT,
+  backdrop TEXT,
+  owned_id TEXT,
+  conn_id  TEXT,
+  status   TEXT NOT NULL,
+  user_id  INTEGER,
+  created  INTEGER NOT NULL
+);
+-- подарки, поставленные в PvP-раунд
+CREATE TABLE IF NOT EXISTS pvp_gifts (
+  uid      TEXT PRIMARY KEY,
+  round_id INTEGER NOT NULL,
+  user_id  INTEGER NOT NULL,
+  gift_id  TEXT NOT NULL,
+  value    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pvp_gifts_round ON pvp_gifts(round_id);
+
 -- id платежей Telegram, чтобы не зачислить дважды
 CREATE TABLE IF NOT EXISTS payments (
   charge_id TEXT PRIMARY KEY,
@@ -284,7 +307,86 @@ class Game(PvpMixin):
         self.closed: set[str] = {r["key"][5:] for r in db.q("SELECT key FROM settings WHERE key LIKE 'game:%' AND value='0'")}
         self.catalog: list[dict] = []
         self.by_id: dict[str, dict] = {}
+        self.floors: dict[str, int] = {r["key"][6:]: int(r["value"]) for r in db.q("SELECT key, value FROM settings WHERE key LIKE 'floor:%'")}
         self.load_gifts()
+
+    # ---------------- настройки ----------------
+    def setting(self, key: str, default: str = "") -> str:
+        r = self.db.one("SELECT value FROM settings WHERE key=?", (key,))
+        return r["value"] if r else default
+
+    def set_setting(self, key: str, value: str):
+        self.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, str(value)))
+
+    # ---------------- NFT-подарки ----------------
+    @staticmethod
+    def floor_key(name: str) -> str:
+        """«Plush Pepe», «PlushPepe-1821», «plushpepe» → plushpepe."""
+        return "".join(c for c in str(name).split("-")[0].lower() if c.isalnum())
+
+    def set_floor(self, name: str, price: int):
+        key = self.floor_key(name)
+        if not key or price < 0:
+            raise GameError("bad_amount")
+        self.floors[key] = int(price)
+        self.set_setting(f"floor:{key}", int(price))
+
+    def nft_view(self, slug: str) -> dict:
+        r = self.db.one("SELECT * FROM nfts WHERE slug=?", (slug,))
+        base, num = (r["base"], r["number"]) if r else (slug.split("-")[0], 0)
+        return {"id": f"nft:{slug}", "name": f"{base} #{num}" if num else base, "price": self.floors.get(self.floor_key(slug), 0),
+                "img": f"https://nft.fragment.com/gift/{slug.lower()}.medium.jpg", "nft": True, "slug": slug,
+                "model": (r["model"] if r else "") or "", "backdrop": (r["backdrop"] if r else "") or ""}
+
+    def nft_deposit(self, uid: int, slug: str, base: str, number: int, model: str, backdrop: str, owned_id: str, conn_id: str) -> dict | None:
+        """Игрок передал NFT аккаунту проекта → кладём в его инвентарь. None — этот подарок уже зачислен."""
+        gid = f"nft:{slug}"
+        with self.db.tx():
+            old = self.db.one("SELECT * FROM nfts WHERE slug=?", (slug,))
+            if old and old["status"] == "in" and old["owned_id"] == owned_id:
+                return None
+            self.user(uid)
+            self.db.run("INSERT OR REPLACE INTO nfts (slug, base, number, model, backdrop, owned_id, conn_id, status, user_id, created) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)", (slug, base, int(number or 0), model, backdrop, owned_id, conn_id, "in", uid, now()))
+            self.db.run("DELETE FROM inventory WHERE gift_id=?", (gid,))
+            self.db.run("INSERT INTO inventory (uid, user_id, gift_id, created) VALUES (?,?,?,?)", (secrets.token_hex(8), uid, gid, now()))
+            view = self.nft_view(slug)
+            self._add_tx(uid, "dep", view["price"], currency="NFT", gift_id=gid)
+        return view
+
+    def nft_fee(self, price: int) -> int:
+        return int(price * config.WITHDRAW_FEE) + config.NFT_TRANSFER_STARS
+
+    def nft_withdraw(self, uid: int, inv_uid: str) -> dict:
+        """Списать комиссию и снять NFT с инвентаря. Сам подарок потом передаёт бот (main.py)."""
+        with self.db.tx():
+            it = self.db.one("SELECT * FROM inventory WHERE uid=? AND user_id=?", (inv_uid, uid))
+            if not it or not it["gift_id"].startswith("nft:"):
+                raise GameError("not_found")
+            slug = it["gift_id"][4:]
+            n = self.db.one("SELECT * FROM nfts WHERE slug=?", (slug,))
+            if not n or not n["owned_id"] or not n["conn_id"]:
+                raise GameError("not_found")
+            view = self.nft_view(slug)
+            fee = self.nft_fee(view["price"])
+            self._change_balance(uid, -fee)
+            self.db.run("DELETE FROM inventory WHERE uid=?", (inv_uid,))
+            self.db.run("UPDATE nfts SET status='out' WHERE slug=?", (slug,))
+            tx = self._add_tx(uid, "wd", view["price"], currency="NFT", gift_id=it["gift_id"], status="done", extra=f"fee:{fee}")
+        return {"slug": slug, "owned_id": n["owned_id"], "conn_id": n["conn_id"], "fee": fee, "tx": tx, "uid": inv_uid, "view": view}
+
+    def nft_withdraw_done(self, w: dict):
+        profit = w["fee"] - config.NFT_TRANSFER_STARS
+        if profit > 0:
+            self.db.run("INSERT INTO house (game, amount, created) VALUES (?,?,?)", ("withdraw", profit, now()))
+
+    def nft_withdraw_undo(self, uid: int, w: dict):
+        """Telegram не передал подарок — возвращаем всё как было."""
+        with self.db.tx():
+            self.db.run("DELETE FROM transactions WHERE id=?", (w["tx"],))
+            self.db.run("UPDATE nfts SET status='in' WHERE slug=?", (w["slug"],))
+            self.db.run("INSERT INTO inventory (uid, user_id, gift_id, created) VALUES (?,?,?,?)", (w["uid"], uid, f"nft:{w['slug']}", now()))
+            self._change_balance(uid, w["fee"])
 
     # ---------------- каталог подарков ----------------
     def load_gifts(self):
@@ -380,6 +482,9 @@ class Game(PvpMixin):
 
     # ---------------- состояние для фронта ----------------
     def gift_view(self, gift_id: str, uid: str | None = None) -> dict:
+        if gift_id.startswith("nft:"):
+            g = self.nft_view(gift_id[4:])
+            return {**g, "uid": uid, "fee": self.nft_fee(g["price"])} if uid else g
         g = self.by_id.get(gift_id) or {"id": gift_id, "name": gift_id, "price": 0, "img": f"img/gifts/{gift_id}.webp"}
         return {**g, "uid": uid} if uid else dict(g)
 
@@ -461,6 +566,7 @@ class Game(PvpMixin):
                 "houseEdge": config.HOUSE_EDGE, "maxChance": config.MAX_CHANCE, "upgradeMaxRatio": config.UPGRADE_MAX_RATIO,
                 "pvpFee": config.PVP_FEE, "pvpMinBet": config.PVP_MIN_BET, "pvpMaxBet": config.PVP_MAX_BET,
                 "welcomeBonus": config.WELCOME_BONUS, "dailyReward": config.DAILY_REWARD,
+                "withdrawFee": config.WITHDRAW_FEE, "nftTransferStars": config.NFT_TRANSFER_STARS,
                 "minesEdge": config.MINES_EDGE, "minBet": config.MIN_BET, "appName": config.APP_NAME,
             },
         }
@@ -550,12 +656,14 @@ class Game(PvpMixin):
                 g = self.db.one("SELECT * FROM inventory WHERE uid=? AND user_id=?", (gift_uid, uid))
                 if not g:
                     raise GameError("not_found")
-                value = self.by_id.get(g["gift_id"], {"price": 0})["price"]
+                value = self.gift_view(g["gift_id"])["price"]
                 if value <= 0:
                     raise GameError("bad_amount")
                 if value > max_stake:
                     raise GameError("stake_too_big")
                 self.db.run("DELETE FROM inventory WHERE uid=?", (gift_uid,))
+                if g["gift_id"].startswith("nft:"):  # NFT остаётся на аккаунте проекта
+                    self.db.run("UPDATE nfts SET status='house' WHERE slug=?", (g["gift_id"][4:],))
                 self._add_tx(uid, "fee", value, game="Апгрейдер", item="nft", gift_id=g["gift_id"])
             else:
                 value = int(stake)
@@ -714,12 +822,16 @@ class Game(PvpMixin):
             raise GameError("not_found")
         return {"status": dep["status"], "credited": dep["credited"]}
 
-    def withdraw(self, uid: int, amount: int, method: str = "stars") -> int:
+    def withdraw(self, uid: int, amount: int, method: str = "stars") -> tuple[int, int]:
+        """Заявка на вывод. С баланса списывается amount, игрок получает amount − комиссия. → (id заявки, комиссия)."""
         if amount < config.MIN_WITHDRAW:
             raise GameError("bad_amount")
+        fee = int(amount * config.WITHDRAW_FEE)
         with self.db.tx():
             self._change_balance(uid, -amount)
-            return self._add_tx(uid, "wd", amount, currency=method.upper(), status="pending")
+            if fee > 0:
+                self.db.run("INSERT INTO house (game, amount, created) VALUES (?,?,?)", ("withdraw", fee, now()))
+            return self._add_tx(uid, "wd", amount, currency=method.upper(), status="pending", extra=f"fee:{fee}"), fee
 
     # ---------------- лента, лидеры ----------------
     def feed(self, limit: int = 20) -> list[dict]:

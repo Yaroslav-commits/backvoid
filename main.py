@@ -68,7 +68,9 @@ ADMIN_HELP = (
     "/syncgifts — обновить цены подарков из Telegram сейчас\n"
     "/addstars id кол-во — начислить/списать звёзды\n"
     "/givegift id gift_id — выдать подарок\n"
-    "/promo КОД награда активаций — промокод"
+    "/promo КОД награда активаций — промокод\n"
+    "/floor Коллекция цена — цена NFT-коллекции в ⭐ (например /floor PlushPepe 500000)\n"
+    "/nft — NFT-подарки в боте, подключение аккаунта, оплата TON"
 )
 
 
@@ -227,6 +229,75 @@ def build_router(game: Game, services: Services | None = None) -> Router:
             await message.answer(f"Обновлено подарков: {n}\n\n{top}")
         except Exception as e:  # noqa: BLE001
             await message.answer(f"Не получилось: {e}")
+
+    # ---------- NFT-подарки: аккаунт проекта подключён к боту через Telegram Business ----------
+    async def tell_admins(bot, text: str):
+        for a in config.ADMIN_IDS:
+            try:
+                await bot.send_message(a, text)
+            except Exception:  # noqa: BLE001
+                pass
+
+    @r.business_connection()
+    async def biz_connect(bc):
+        if bc.user.id not in config.ADMIN_IDS:   # чужой аккаунт подключил бота — игнорируем
+            return
+        rights = getattr(bc, "rights", None)
+        can = bool(rights and getattr(rights, "can_transfer_and_upgrade_gifts", False))
+        if bc.is_enabled:
+            game.set_setting("biz:conn", bc.id)
+            game.set_setting("biz:user", bc.user.id)
+        elif game.setting("biz:conn") == bc.id:
+            game.set_setting("biz:conn", "")
+        await tell_admins(bc.bot, ("✅ Аккаунт подключён — подарки, отправленные ему в личку, попадут игрокам в инвентарь.\n"
+                                   + ("" if can else "⚠️ Включи боту право «Подарки и звёзды → передача подарков», иначе вывод NFT не сработает."))
+                          if bc.is_enabled else "❌ Аккаунт отключён от бота — приём NFT остановлен.")
+
+    @r.business_message(F.unique_gift)
+    async def biz_gift(message: Message):
+        conn, owner = game.setting("biz:conn"), game.setting("biz:user")
+        u, info = message.from_user, message.unique_gift
+        if not conn or message.business_connection_id != conn or not u or str(u.id) == owner or u.is_bot:
+            return
+        g = info.gift
+        if not info.owned_gift_id:
+            return
+        game.upsert_user(u.model_dump())
+        view = game.nft_deposit(u.id, g.name, g.base_name, g.number, g.model.name if g.model else "",
+                                g.backdrop.name if g.backdrop else "", info.owned_gift_id, conn)
+        if not view:
+            return
+        price = f"{view['price']} ⭐" if view["price"] else "цена уточняется"
+        try:
+            await message.bot.send_message(u.id, f"🎁 <b>{view['name']}</b> зачислен в инвентарь ({price}).\nИграй им в PvP или выводи обратно в любой момент.", reply_markup=play_kb())
+        except Exception:  # noqa: BLE001 — игрок ещё не запускал бота
+            pass
+        await tell_admins(message.bot, f"🎁 NFT от @{u.username or u.id}: <b>{view['name']}</b> — {price}"
+                          + ("" if view["price"] else f"\nЗадай цену: <code>/floor {game.floor_key(g.name)} ЦЕНА</code>"))
+
+    @r.message(Command("floor"))
+    async def floor_cmd(message: Message, command: CommandObject):
+        if not is_admin(message):
+            return
+        a = (command.args or "").split()
+        if len(a) != 2 or not a[1].isdigit():
+            lst = "\n".join(f"{k} — {v} ⭐" for k, v in sorted(game.floors.items())) or "пока пусто"
+            return await message.answer(f"Формат: /floor Коллекция цена_в_звёздах\n\nСейчас:\n{lst}")
+        game.set_floor(a[0], int(a[1]))
+        await message.answer(f"Готово: {game.floor_key(a[0])} = {a[1]} ⭐")
+
+    @r.message(Command("nft"))
+    async def nft_cmd(message: Message):
+        if not is_admin(message):
+            return
+        rows = game.db.q("SELECT status, COUNT(*) c FROM nfts GROUP BY status")
+        per_ton = await services.stars_per_ton() if services else 0
+        await message.answer(
+            f"Аккаунт для подарков: {'✅ подключён' if game.setting('biz:conn') else '❌ не подключён (Настройки → Telegram для бизнеса → Чат-боты)'}\n"
+            f"NFT: {', '.join(f'{x[0]}: {x[1]}' for x in ((r['status'], r['c']) for r in rows)) or 'нет'}\n"
+            f"Комиссия на вывод: {config.WITHDRAW_FEE * 100:g}%\n"
+            f"TON: кошелёк {'задан' if config.TON_WALLET else '❌ НЕ задан (переменная TON_WALLET)'}, "
+            f"курс {'1 TON = ' + str(per_ton) + ' ⭐' if per_ton else '❌ не получен'}")
 
     @r.message(F.text)
     async def fallback(message: Message):
@@ -414,7 +485,7 @@ async def h_pvp_bet(request):
     uid = current_user(request)
     b = await body(request)
     g = request.app["game"]
-    st = g.pvp_bet(uid, str(b.get("game", "")), int(b.get("amount") or 0), b.get("side"))
+    st = g.pvp_bet(uid, str(b.get("game", "")), int(b.get("amount") or 0), b.get("side"), str(b.get("gift") or "") or None)
     return ok(st, balance=g.balance(uid))
 
 
@@ -496,17 +567,34 @@ async def h_withdraw(request):
     amount = int(b.get("stars") or 0)
     method = str(b.get("method") or "stars")[:10]
     game: Game = request.app["game"]
-    tx_id = game.withdraw(uid, amount, method)
+    tx_id, fee = game.withdraw(uid, amount, method)
     u = game.user(uid)
     text = (f"💸 Заявка на вывод #{tx_id}\n"
             f"Игрок: {u['first_name']} @{u['username'] or '—'} (id {uid})\n"
-            f"Сумма: {amount} ⭐, способ: {method}")
+            f"Списано: {amount} ⭐, способ: {method}\n"
+            f"К выплате: {amount - fee} ⭐ (твоя комиссия {fee} ⭐)")
     for admin in config.ADMIN_IDS:
         try:
             await request.app["bot"].send_message(admin, text)
         except Exception:  # noqa: BLE001
             pass
     return ok(balance=game.balance(uid), id=tx_id)
+
+
+async def h_nft_withdraw(request):
+    """Вывод NFT: бот передаёт подарок игроку с аккаунта проекта."""
+    uid = current_user(request)
+    game: Game = request.app["game"]
+    w = game.nft_withdraw(uid, str((await body(request)).get("uid") or ""))
+    try:
+        await request.app["bot"].transfer_gift(business_connection_id=w["conn_id"], owned_gift_id=w["owned_id"],
+                                               new_owner_chat_id=uid, star_count=config.NFT_TRANSFER_STARS)
+    except Exception as e:  # noqa: BLE001 — Telegram отказал: возвращаем подарок и комиссию
+        log.warning("nft withdraw %s: %s", w["slug"], e)
+        game.nft_withdraw_undo(uid, w)
+        return fail("transfer_failed")
+    game.nft_withdraw_done(w)
+    return ok(balance=game.balance(uid), inventory=game.inventory(uid))
 
 
 def _letter_svg(name: str, uid: int) -> str:
@@ -579,6 +667,7 @@ def build_app(game: Game, bot: Bot, services: Services | None = None) -> web.App
     r.add_post("/api/tasks/claim", h_tasks_claim)
     r.add_post("/api/invoice", h_invoice)
     r.add_post("/api/withdraw", h_withdraw)
+    r.add_post("/api/nft/withdraw", h_nft_withdraw)
     r.add_get("/api/avatar/{uid}", h_avatar)
     site = Path(config.WEBAPP_DIR) if config.WEBAPP_DIR else None
     if site and (site / "index.html").exists():

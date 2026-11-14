@@ -71,8 +71,16 @@ class PvpMixin:
                 if ticket < acc:
                     w = b
                     break
-            fee = int((pot - w["bamount"]) * config.PVP_FEE)
+            # подарки из банка целиком уходят победителю; комиссия берётся только из звёзд банка
+            gifts = self.db.q("SELECT * FROM pvp_gifts WHERE round_id=?", (r["id"],))
+            stars_in = pot - sum(g["value"] for g in gifts)
+            fee = min(int((pot - w["bamount"]) * config.PVP_FEE), stars_in)
             payouts = {w["bid"]: pot - fee}
+            for g in gifts:
+                self.db.run("INSERT INTO inventory (uid, user_id, gift_id, created) VALUES (?,?,?,?)", (g["uid"], w["id"], g["gift_id"], int(time.time())))
+                if g["gift_id"].startswith("nft:"):
+                    self.db.run("UPDATE nfts SET user_id=?, status='in' WHERE slug=?", (w["id"], g["gift_id"][4:]))
+            gift_value = pot - stars_in
             winner, chance = str(w["id"]), w["bamount"] / pot
         else:
             pools = {s: sum(b["bamount"] for b in bets if b["bside"] == s) for s in SIDES}
@@ -81,13 +89,15 @@ class PvpMixin:
             share = lose_pool - int(lose_pool * config.PVP_FEE)
             payouts = {b["bid"]: b["bamount"] + share * b["bamount"] // win_pool for b in bets if b["bside"] == winner}
             chance = win_pool / pot
+            gift_value = 0
         for b in bets:
             p = payouts.get(b["bid"], 0)
             if p:
-                self._change_balance(b["id"], p)
+                self._change_balance(b["id"], p - gift_value)
                 self._add_tx(b["id"], "win", p, game=title, item="stars", extra=f"pvp:{r['id']}")
                 self.db.run("UPDATE pvp_bets SET payout=? WHERE id=?", (p, b["bid"]))
                 paid += p
+        self.db.run("DELETE FROM pvp_gifts WHERE round_id=?", (r["id"],))
         fee = pot - paid  # комиссия + копейки от округления
         self.db.run("UPDATE pvp_rounds SET status='done', resolved_at=?, winner=?, win_chance=?, roll=?, pot=?, fee=? WHERE id=?",
                     (now_ms(), winner, chance, roll, pot, fee, r["id"]))
@@ -95,14 +105,16 @@ class PvpMixin:
             self.db.run("INSERT INTO house (game, amount, created) VALUES (?,?,?)", (r["game"], fee, int(time.time())))
 
     # ---------------- действия игрока ----------------
-    def pvp_bet(self, uid: int, game: str, amount: int, side: str | None = None) -> dict:
+    def pvp_bet(self, uid: int, game: str, amount: int, side: str | None = None, gift_uid: str | None = None) -> dict:
         from game import GameError  # noqa: PLC0415 — game импортирует этот модуль
         if game not in PVP_GAMES:
             raise GameError("not_found")
         amount = int(amount)
         if game == "fireice" and side not in SIDES:
             raise GameError("bad_side")
-        if amount < config.PVP_MIN_BET:
+        if gift_uid and game != "roulette":   # подарок нельзя поделить между победителями стороны
+            raise GameError("bad_amount")
+        if not gift_uid and amount < config.PVP_MIN_BET:
             raise GameError("bad_amount")
         self.require_open(game)
         self.pvp_tick(game)
@@ -115,12 +127,24 @@ class PvpMixin:
             mine = next((b for b in bets if b["id"] == uid), None)
             if mine and game == "fireice" and mine["bside"] != side:
                 raise GameError("side_locked")
-            if (mine["bamount"] if mine else 0) + amount > config.PVP_MAX_BET:
+            if not gift_uid and (mine["bamount"] if mine else 0) + amount > config.PVP_MAX_BET:
                 raise GameError("bad_amount")
             if not mine and len(bets) >= config.PVP_MAX_PLAYERS:
                 raise GameError("full")
-            self._change_balance(uid, -amount)
-            self._add_tx(uid, "fee", amount, game=PVP_GAMES[game], item="stars", extra=f"pvp:{r['id']}")
+            if gift_uid:
+                it = self.db.one("SELECT * FROM inventory WHERE uid=? AND user_id=?", (gift_uid, uid))
+                if not it:
+                    raise GameError("not_found")
+                amount = self.gift_view(it["gift_id"])["price"]
+                if amount <= 0:
+                    raise GameError("no_price")
+                self.db.run("DELETE FROM inventory WHERE uid=?", (gift_uid,))
+                self.db.run("INSERT INTO pvp_gifts (uid, round_id, user_id, gift_id, value) VALUES (?,?,?,?,?)",
+                            (gift_uid, r["id"], uid, it["gift_id"], amount))
+                self._add_tx(uid, "fee", amount, game=PVP_GAMES[game], item="nft", gift_id=it["gift_id"], extra=f"pvp:{r['id']}")
+            else:
+                self._change_balance(uid, -amount)
+                self._add_tx(uid, "fee", amount, game=PVP_GAMES[game], item="stars", extra=f"pvp:{r['id']}")
             if mine:
                 self.db.run("UPDATE pvp_bets SET amount=amount+? WHERE id=?", (amount, mine["bid"]))
             else:
@@ -148,7 +172,12 @@ class PvpMixin:
             self.db.run("DELETE FROM pvp_bets WHERE id=?", (bet["id"],))
             # ставка не состоялась — убираем её из истории и оборота
             self.db.run("DELETE FROM transactions WHERE user_id=? AND type='fee' AND extra=?", (uid, f"pvp:{r['id']}"))
-            self._change_balance(uid, bet["amount"])
+            back = 0
+            for g in self.db.q("SELECT * FROM pvp_gifts WHERE round_id=? AND user_id=?", (r["id"], uid)):
+                self.db.run("INSERT INTO inventory (uid, user_id, gift_id, created) VALUES (?,?,?,?)", (g["uid"], uid, g["gift_id"], int(time.time())))
+                back += g["value"]
+            self.db.run("DELETE FROM pvp_gifts WHERE round_id=? AND user_id=?", (r["id"], uid))
+            self._change_balance(uid, bet["amount"] - back)
         return self.pvp_state(game, uid)
 
     # ---------------- состояние для сайта ----------------
@@ -163,7 +192,10 @@ class PvpMixin:
         pot = sum(b["bamount"] for b in bets)
         done = r["status"] == "done"
         pools = {s: sum(b["bamount"] for b in bets if b["bside"] == s) for s in SIDES}
-        players = [{**self.public_user(b), "amount": b["bamount"], "side": b["bside"],
+        staked: dict[int, list] = {}
+        for g in self.db.q("SELECT * FROM pvp_gifts WHERE round_id=?", (r["id"],)):
+            staked.setdefault(g["user_id"], []).append({**self.gift_view(g["gift_id"]), "price": g["value"]})
+        players = [{**self.public_user(b), "amount": b["bamount"], "side": b["bside"], "gifts": staked.get(b["id"], []),
                     "chance": round(b["bamount"] / pot, 4) if pot else 0, "payout": b["bpayout"] if done else 0} for b in bets]
         mine = next((p for p in players if p["id"] == uid), None)
         out = {
