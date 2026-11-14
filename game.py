@@ -354,6 +354,98 @@ class Game(PvpMixin):
             self._add_tx(uid, "dep", view["price"], currency="NFT", gift_id=gid)
         return view
 
+    # ---------------- склад бота: магазин и цели апгрейда ----------------
+    def nft_stock(self, slug: str, base: str, number: int, model: str, backdrop: str, owned_id: str, conn_id: str) -> bool:
+        """NFT, который лежит на аккаунте проекта, → на склад. False — он уже учтён."""
+        old = self.db.one("SELECT status FROM nfts WHERE slug=?", (slug,))
+        if old:
+            self.db.run("UPDATE nfts SET owned_id=?, conn_id=? WHERE slug=?", (owned_id, conn_id, slug))
+            return False
+        self.db.run("INSERT INTO nfts (slug, base, number, model, backdrop, owned_id, conn_id, status, created) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (slug, base, int(number or 0), model, backdrop, owned_id, conn_id, "house", now()))
+        return True
+
+    def shop(self, priced: bool = True) -> list[dict]:
+        out = []
+        for r in self.db.q("SELECT slug FROM nfts WHERE status='house'"):
+            v = self.nft_view(r["slug"])
+            if v["price"] > 0 or not priced:
+                out.append({**v, "buy": int(v["price"] * (1 + config.SHOP_MARKUP))})
+        return sorted(out, key=lambda g: -g["price"])
+
+    def target(self, gift_id: str) -> dict | None:
+        """Цель апгрейда / товар магазина: NFT со склада или (в старых режимах) подарок из каталога."""
+        if gift_id.startswith("nft:"):
+            ok_ = self.db.one("SELECT 1 FROM nfts WHERE slug=? AND status='house'", (gift_id[4:],))
+            return self.nft_view(gift_id[4:]) if ok_ else None
+        return self.by_id.get(gift_id) if config.GIFTS_SOURCE != "nft" else None
+
+    def _give(self, uid: int, gift_id: str):
+        if gift_id.startswith("nft:"):
+            self.db.run("UPDATE nfts SET status='in', user_id=? WHERE slug=?", (uid, gift_id[4:]))
+        self.db.run("INSERT INTO inventory (uid, user_id, gift_id, created) VALUES (?,?,?,?)", (secrets.token_hex(8), uid, gift_id, now()))
+
+    def shop_buy(self, uid: int, gift_id: str) -> dict:
+        with self.db.tx():
+            self.user(uid)
+            g = self.target(gift_id) if gift_id.startswith("nft:") else None
+            if not g or g["price"] <= 0:
+                raise GameError("not_found")
+            buy = int(g["price"] * (1 + config.SHOP_MARKUP))
+            self._change_balance(uid, -buy)
+            self._give(uid, gift_id)
+            self._add_tx(uid, "wd", buy, currency="NFT", game="Магазин", gift_id=gift_id, status="done")
+            if buy > g["price"]:
+                self.db.run("INSERT INTO house (game, amount, created) VALUES (?,?,?)", ("shop", buy - g["price"], now()))
+        return {"balance": self.balance(uid), "inventory": self.inventory(uid), "shop": self.shop()}
+
+    # ---------------- админка в приложении ----------------
+    def admin_overview(self) -> dict:
+        t = now()
+        def inc(since):
+            return {r["game"]: r["s"] for r in self.db.q("SELECT game, SUM(amount) s FROM house WHERE created>=? GROUP BY game", (since,))}
+        one = lambda sql, a=(): self.db.one(sql, a)["s"]  # noqa: E731
+        wds = self.db.q("SELECT t.id tid, t.amount tamount, t.currency tcur, t.extra textra, t.created tcreated, u.* FROM transactions t "
+                        "JOIN users u ON u.id=t.user_id WHERE t.type='wd' AND t.status='pending' ORDER BY t.id DESC LIMIT 50")
+        return {
+            "income": {"day": inc(t - 86400), "week": inc(t - 7 * 86400), "all": inc(0)},
+            "users": one("SELECT COUNT(*) s FROM users"), "usersDay": one("SELECT COUNT(*) s FROM users WHERE created>=?", (t - 86400,)),
+            "deposits": one("SELECT COALESCE(SUM(amount),0) s FROM payments"),
+            "balances": one("SELECT COALESCE(SUM(balance),0) s FROM users"),
+            "withdrawals": [{"id": r["tid"], "amount": r["tamount"], "fee": int((r["textra"] or "fee:0").split(":")[-1] or 0),
+                             "method": r["tcur"], "date": r["tcreated"] * 1000, "user": self.public_user(r)} for r in wds],
+            "stock": self.shop(priced=False),
+            "nfts": {r["status"]: r["c"] for r in self.db.q("SELECT status, COUNT(*) c FROM nfts GROUP BY status")},
+            "floors": self.floors, "games": self.games(), "titles": config.GAMES,
+            "connected": bool(self.setting("biz:conn")), "withdrawFee": config.WITHDRAW_FEE, "pvpFee": config.PVP_FEE,
+        }
+
+    def admin_wd(self, tx_id: int, done: bool) -> dict:
+        """Заявка на вывод: выплачено или отклонено (звёзды возвращаются игроку). → {user_id, amount, pay}"""
+        with self.db.tx():
+            r = self.db.one("SELECT * FROM transactions WHERE id=? AND type='wd' AND status='pending'", (int(tx_id),))
+            if not r:
+                raise GameError("not_found")
+            fee = int((r["extra"] or "fee:0").split(":")[-1] or 0)
+            self.db.run("UPDATE transactions SET status=? WHERE id=?", ("done" if done else "rejected", r["id"]))
+            if not done:
+                self._change_balance(r["user_id"], r["amount"])
+                if fee:
+                    self.db.run("INSERT INTO house (game, amount, created) VALUES (?,?,?)", ("withdraw", -fee, now()))
+        return {"user_id": r["user_id"], "amount": r["amount"], "pay": r["amount"] - fee}
+
+    def admin_user(self, query: str) -> dict:
+        q = str(query).strip().lstrip("@")
+        r = self.db.one("SELECT * FROM users WHERE id=?", (int(q),)) if q.isdigit() else \
+            self.db.one("SELECT * FROM users WHERE LOWER(username)=?", (q.lower(),))
+        if not r:
+            raise GameError("not_found")
+        return {**self.public_user(r), "balance": r["balance"], "banned": bool(r["banned"]), "gifts": len(self.inventory(r["id"])),
+                "deposits": self.db.one("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE user_id=?", (r["id"],))["s"]}
+
+    def admin_ban(self, uid: int, banned: bool):
+        self.db.run("UPDATE users SET banned=? WHERE id=?", (1 if banned else 0, int(uid)))
+
     def nft_fee(self, price: int) -> int:
         return int(price * config.WITHDRAW_FEE) + config.NFT_TRANSFER_STARS
 
@@ -554,7 +646,8 @@ class Game(PvpMixin):
             "transactions": self.transactions(uid),
             "referrals": self.referrals(uid),
             "tasks": self.tasks(uid),
-            "catalog": self.catalog,
+            "catalog": self.shop() if config.GIFTS_SOURCE == "nft" else self.catalog,
+            "shop": self.shop(),
             "games": self.games(),
             "packs": PACKS,
             "levels": LEVELS,
@@ -644,7 +737,7 @@ class Game(PvpMixin):
         return max(0.0001, min(config.MAX_CHANCE, stake / price * (1 - config.HOUSE_EDGE)))
 
     def upgrade(self, uid: int, target_id: str, stake: int = 0, gift_uid: str | None = None) -> dict:
-        target = self.by_id.get(target_id)
+        target = self.target(target_id)
         if not target or target["price"] <= 0:
             raise GameError("not_found")
         self.require_open("upgrade")
@@ -676,9 +769,10 @@ class Game(PvpMixin):
             ch = self.chance(value, target["price"])
             roll = secrets.randbelow(1_000_000) / 1_000_000
             win = roll < ch
+            if win and not self.target(target_id):   # цель только что забрали
+                raise GameError("not_found")
             if win:
-                self.db.run("INSERT INTO inventory (uid, user_id, gift_id, created) VALUES (?,?,?,?)",
-                            (secrets.token_hex(8), uid, target_id, now()))
+                self._give(uid, target_id)
                 self._add_tx(uid, "win", target["price"], game="Апгрейдер", item="nft", gift_id=target_id)
         return {"win": win, "chance": ch, "roll": roll, "balance": self.balance(uid), "inventory": self.inventory(uid)}
 

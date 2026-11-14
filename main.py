@@ -385,6 +385,7 @@ async def full_state(request: web.Request, uid: int) -> dict:
     sv: Services = request.app["services"]
     per_ton = await sv.stars_per_ton()
     st["rates"] = {"usdToStars": round(1 / config.STAR_USD, 2), "tonToStars": per_ton}
+    st["config"]["admin"] = uid in config.ADMIN_IDS
     st["config"]["ton"] = {"enabled": per_ton > 0, "minStars": config.TON_MIN_STARS}
     return st
 
@@ -587,7 +588,7 @@ async def h_nft_withdraw(request):
     game: Game = request.app["game"]
     w = game.nft_withdraw(uid, str((await body(request)).get("uid") or ""))
     try:
-        await request.app["bot"].transfer_gift(business_connection_id=w["conn_id"], owned_gift_id=w["owned_id"],
+        await request.app["bot"].transfer_gift(business_connection_id=game.setting("biz:conn") or w["conn_id"], owned_gift_id=w["owned_id"],
                                                new_owner_chat_id=uid, star_count=config.NFT_TRANSFER_STARS)
     except Exception as e:  # noqa: BLE001 — Telegram отказал: возвращаем подарок и комиссию
         log.warning("nft withdraw %s: %s", w["slug"], e)
@@ -595,6 +596,82 @@ async def h_nft_withdraw(request):
         return fail("transfer_failed")
     game.nft_withdraw_done(w)
     return ok(balance=game.balance(uid), inventory=game.inventory(uid))
+
+
+async def h_shop_buy(request):
+    uid = current_user(request)
+    return ok(request.app["game"].shop_buy(uid, str((await body(request)).get("id") or "")))
+
+
+# ---------------- админка в приложении ----------------
+def admin_user(request) -> int:
+    uid = current_user(request)
+    if uid not in config.ADMIN_IDS:
+        raise AuthError("not admin")
+    return uid
+
+
+async def sync_stock(request) -> int:
+    """Все NFT с подключённого аккаунта, которых ещё нет в боте, → на склад."""
+    game: Game = request.app["game"]
+    conn = game.setting("biz:conn")
+    if not conn:
+        raise GameError("not_ready")
+    added, offset = 0, None
+    for _ in range(20):
+        res = await request.app["bot"].get_business_account_gifts(business_connection_id=conn, offset=offset, limit=100)
+        for og in res.gifts:
+            g = getattr(og, "gift", None)
+            if getattr(og, "type", "") != "unique" or not g or not og.owned_gift_id:
+                continue
+            added += game.nft_stock(g.name, g.base_name, g.number, g.model.name if g.model else "",
+                                    g.backdrop.name if g.backdrop else "", og.owned_gift_id, conn)
+        offset = res.next_offset
+        if not offset:
+            break
+    return added
+
+
+async def h_admin(request):
+    admin_user(request)
+    return ok(request.app["game"].admin_overview())
+
+
+async def h_admin_act(request):
+    admin_user(request)
+    game: Game = request.app["game"]
+    b = await body(request)
+    act, extra = str(b.get("action") or ""), {}
+    if act in ("wd_done", "wd_reject"):
+        r = game.admin_wd(int(b.get("id") or 0), act == "wd_done")
+        try:
+            await request.app["bot"].send_message(r["user_id"], f"✅ Вывод {r['pay']} ⭐ выплачен" if act == "wd_done"
+                                                  else f"↩️ Заявка на вывод отклонена, {r['amount']} ⭐ вернулись на баланс")
+        except Exception:  # noqa: BLE001
+            pass
+    elif act == "floor":
+        game.set_floor(str(b.get("name") or ""), int(b.get("price") or 0))
+    elif act == "game":
+        game.set_game(str(b.get("game") or ""), bool(b.get("open")))
+    elif act == "sync":
+        try:
+            extra["added"] = await sync_stock(request)
+        except GameError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.warning("sync stock: %s", e)
+            return fail("check_failed")
+    elif act == "user":
+        extra["found"] = game.admin_user(b.get("q") or "")
+    elif act == "stars":
+        game.admin_add_balance(int(b.get("id") or 0), int(b.get("amount") or 0))
+        extra["found"] = game.admin_user(b.get("id"))
+    elif act == "ban":
+        game.admin_ban(int(b.get("id") or 0), bool(b.get("banned")))
+        extra["found"] = game.admin_user(b.get("id"))
+    else:
+        return fail("not_found")
+    return ok(game.admin_overview(), **extra)
 
 
 def _letter_svg(name: str, uid: int) -> str:
@@ -668,6 +745,9 @@ def build_app(game: Game, bot: Bot, services: Services | None = None) -> web.App
     r.add_post("/api/invoice", h_invoice)
     r.add_post("/api/withdraw", h_withdraw)
     r.add_post("/api/nft/withdraw", h_nft_withdraw)
+    r.add_post("/api/shop/buy", h_shop_buy)
+    r.add_get("/api/admin", h_admin)
+    r.add_post("/api/admin/act", h_admin_act)
     r.add_get("/api/avatar/{uid}", h_avatar)
     site = Path(config.WEBAPP_DIR) if config.WEBAPP_DIR else None
     if site and (site / "index.html").exists():

@@ -53,7 +53,7 @@ ADMIN_IDS = [6378471773]
 # «Первый заработок без вложений»: новичок сразу получает стартовые звёзды
 WELCOME_BONUS = int(os.getenv("WELCOME_BONUS", "10"))
 SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "15"))
-DAILY_REWARD = int(os.getenv("DAILY_REWARD", "2"))
+DAILY_REWARD = int(os.getenv("DAILY_REWARD", "5"))
 REF_PERCENT = int(os.getenv("REF_PERCENT", "5"))          # % с пополнений приглашённых
 REF_PER_FRIEND = int(os.getenv("REF_PER_FRIEND", "10"))    # бонус за первое пополнение друга
 MIN_DEPOSIT = int(os.getenv("MIN_DEPOSIT", "1"))
@@ -79,7 +79,9 @@ PVP_MAX_PLAYERS = int(os.getenv("PVP_MAX_PLAYERS", "30"))
 # telegram — каталог и цены сами подтягиваются из Telegram (официальный список подарков и их цены в звёздах),
 #            список GIFTS ниже нужен только как запасной, пока Telegram не ответил
 # manual   — только список GIFTS ниже
-GIFTS_SOURCE = os.getenv("GIFTS_SOURCE", "telegram")
+# nft      — только настоящие NFT со склада бота (проигранные игроками и лежащие на твоём аккаунте). Рекомендуется
+GIFTS_SOURCE = os.getenv("GIFTS_SOURCE", "nft")
+SHOP_MARKUP = float(os.getenv("SHOP_MARKUP", "0.05"))            # наценка магазина подарков к цене коллекции
 GIFTS_SYNC_MINUTES = int(os.getenv("GIFTS_SYNC_MINUTES", "30"))  # как часто обновлять цены
 GIFT_MIN_PRICE = int(os.getenv("GIFT_MIN_PRICE", "0"))           # не показывать подарки дешевле / дороже
 GIFT_MAX_PRICE = int(os.getenv("GIFT_MAX_PRICE", "0"))           # 0 — без ограничения
