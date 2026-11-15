@@ -103,6 +103,10 @@ NFT_TRANSFER_STARS = int(os.getenv("NFT_TRANSFER_STARS", "25"))    # сколь�
 # Авто-цены: ключ Gift Asset (выдают в @giftassetapi). С ключом цены коллекций берутся с маркетов сами (минимальный флор)
 GIFTASSET_KEY = os.getenv("GIFTASSET_KEY", "")
 NFT_PRICE_FACTOR = float(os.getenv("NFT_PRICE_FACTOR", "0.95"))    # цена в боте = флор × этот множитель (0.95 → на 5% ниже рынка)
+# Бесплатный вариант: цены с маркета Portals. Нужна строка авторизации «tma ...» (как получить — команда /portals в боте).
+# Её можно задать и прямо из бота: /portals tma ... — тогда перезапуск не нужен
+PORTALS_AUTH = os.getenv("PORTALS_AUTH", "")
+PORTALS_URL = "https://portals-market.com/api/collections/floors"
 NFT_FLOORS_URL = os.getenv("NFT_FLOORS_URL", "https://giftasset.gifts/api/v1/gifts/get_gifts_price_list" if GIFTASSET_KEY else "")
 NFT_FLOORS_UNIT = os.getenv("NFT_FLOORS_UNIT", "ton")              # в чём цены в этом JSON: ton или stars
 NFT_FLOORS_MINUTES = int(os.getenv("NFT_FLOORS_MINUTES", "30"))

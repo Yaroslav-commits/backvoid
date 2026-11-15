@@ -45,7 +45,7 @@ class Services:
             self.tasks.append(asyncio.create_task(self._loop(self.sync_gifts, config.GIFTS_SYNC_MINUTES * 60, "gifts")))
         if self.bot:
             self.tasks.append(asyncio.create_task(self._loop(self.sync_stock, 300, "nft stock")))
-        if config.NFT_FLOORS_URL:
+        if config.NFT_FLOORS_URL or config.PORTALS_AUTH or self.game.setting("portals:auth") or self.bot:
             self.tasks.append(asyncio.create_task(self._loop(self.sync_floors, config.NFT_FLOORS_MINUTES * 60, "nft floors")))
         if config.TON_WALLET:
             self.tasks.append(asyncio.create_task(self._loop(self.refresh_ton_rate, 300, "ton rate")))
@@ -93,11 +93,27 @@ class Services:
 
     async def sync_floors(self) -> int:
         """Флоры NFT-коллекций из NFT_FLOORS_URL → цены в звёздах."""
-        k_ = config.GIFTASSET_KEY
+        k_, url = config.GIFTASSET_KEY, config.NFT_FLOORS_URL
         hdr = {"X-API-Key": k_, "x-api-token": k_, "Authorization": f"Bearer {k_}"} if k_ else {}
-        async with self.http.get(config.NFT_FLOORS_URL, headers=hdr) as r:
+        portals = self.game.setting("portals:auth") or config.PORTALS_AUTH
+        if not url and portals:
+            url = config.PORTALS_URL
+            hdr = {"Authorization": portals if portals.startswith("tma ") else f"tma {portals}",
+                   "Accept": "application/json, text/plain, */*", "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+                   "Origin": "https://portals-market.com", "Referer": "https://portals-market.com/",
+                   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"}
+        if not url:
+            return 0
+        async with self.http.get(url, headers=hdr) as r:
             if r.status in (401, 403):
-                raise RuntimeError("источник цен не принял ключ (GIFTASSET_KEY)")
+                if url == config.PORTALS_URL and self.bot and time.time() - getattr(self, "_auth_warned", 0) > 6 * 3600:
+                    self._auth_warned = time.time()
+                    for a in config.ADMIN_IDS:   # строка авторизации Portals живёт несколько дней — просим обновить
+                        try:
+                            await self.bot.send_message(a, "⚠️ Portals перестал отдавать цены (авторизация устарела). Обнови её: /portals")
+                        except Exception:  # noqa: BLE001
+                            pass
+                raise RuntimeError(f"источник цен отказал в доступе (код {r.status}): ключ или авторизация не подошли")
             r.raise_for_status()
             d = await r.json(content_type=None)
         if isinstance(d, dict) and len(d) == 1 and isinstance(next(iter(d.values())), (dict, list)):

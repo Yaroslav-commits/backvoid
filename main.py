@@ -71,6 +71,7 @@ ADMIN_HELP = (
     "/promo КОД награда активаций — промокод\n"
     "/floor Коллекция цена — цена NFT-коллекции в ⭐ (например /floor PlushPepe 500000)\n"
     "/syncprices — обновить цены NFT с маркетов сейчас\n"
+    "/portals — бесплатные авто-цены с маркета Portals\n"
     "/nft — NFT-подарки в боте, подключение аккаунта, оплата TON"
 )
 
@@ -297,12 +298,37 @@ def build_router(game: Game, services: Services | None = None) -> Router:
     async def syncprices(message: Message):
         if not is_admin(message):
             return
-        if not config.NFT_FLOORS_URL:
-            return await message.answer("Авто-цены выключены: задай GIFTASSET_KEY (или NFT_FLOORS_URL) в настройках")
+        if not (config.NFT_FLOORS_URL or config.PORTALS_AUTH or game.setting("portals:auth")):
+            return await message.answer("Авто-цены выключены. Бесплатно: /portals · платно: GIFTASSET_KEY в настройках")
         try:
             await message.answer(f"Цены обновлены: {await services.sync_floors()} коллекций")
         except Exception as e:  # noqa: BLE001
             await message.answer(f"Не получилось: {e}")
+
+    @r.message(Command("portals"))
+    async def portals_cmd(message: Message, command: CommandObject):
+        if not is_admin(message):
+            return
+        a = (command.args or "").strip()
+        if not a:
+            return await message.answer(
+                "<b>Бесплатные цены NFT с маркета Portals</b>\n\n"
+                "1. Открой web.telegram.org в Chrome на компьютере и войди в аккаунт\n"
+                "2. Нажми F12 → вкладка Network\n"
+                "3. Открой в Telegram бота @portals и запусти его приложение\n"
+                "4. В Network найди любой запрос к portals-market.com → Headers → Authorization\n"
+                "5. Скопируй значение целиком (начинается с <code>tma </code>) и отправь мне:\n"
+                "<code>/portals tma ...</code>\n\n"
+                "Строка живёт несколько дней. Когда устареет — я напишу, и её надо будет обновить так же.")
+        game.set_setting("portals:auth", a)
+        try:
+            await message.delete()   # в строке авторизации — доступ к твоему аккаунту Portals, не оставляем её в чате
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await message.answer(f"✅ Portals подключён, цены обновлены: {await services.sync_floors()} коллекций")
+        except Exception as e:  # noqa: BLE001
+            await message.answer(f"Строку сохранил, но цены получить не вышло: {e}")
 
     @r.message(Command("nft"))
     async def nft_cmd(message: Message):
