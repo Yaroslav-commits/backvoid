@@ -372,6 +372,9 @@ class Game(PvpMixin):
             v = self.nft_view(r["slug"])
             if v["price"] > 0 or not priced:
                 out.append({**v, "buy": int(v["price"] * (1 + config.SHOP_MARKUP)), "locked": r["status"] == "hold"})
+        if not priced:
+            pz = [p["slug"] for p in self.prizes()]
+            out = [{**g, "prize": pz.index(g["slug"]) + 1 if g["slug"] in pz else 0} for g in out]
         return sorted(out, key=lambda g: -g["price"])
 
     def target(self, gift_id: str) -> dict | None:
@@ -450,6 +453,32 @@ class Game(PvpMixin):
                         ("hold" if locked else "house", str(gift_id)[4:], "house" if locked else "hold"))
         if not self.db.one("SELECT 1 FROM nfts WHERE slug=? AND status=?", (str(gift_id)[4:], "hold" if locked else "house")):
             raise GameError("not_found")
+
+    def prizes(self) -> list[dict]:
+        """Призы сезона (1, 2, 3 место), выставленные в админке."""
+        return [self.nft_view(s) for s in json.loads(self.setting("prizes", "[]"))
+                if self.db.one("SELECT 1 FROM nfts WHERE slug=? AND status IN ('house','hold')", (s,))]
+
+    def admin_prize(self, gift_id: str):
+        """Добавить подарок в призы ТОП-3 или убрать. Приз сразу блокируется, чтобы его не купили."""
+        slug, cur = str(gift_id)[4:], [p["slug"] for p in self.prizes()]
+        if slug in cur:
+            cur.remove(slug)
+        else:
+            if not self.db.one("SELECT 1 FROM nfts WHERE slug=? AND status IN ('house','hold')", (slug,)):
+                raise GameError("not_found")
+            cur = (cur + [slug])[-3:]
+            self.db.run("UPDATE nfts SET status='hold' WHERE slug=?", (slug,))
+        self.set_setting("prizes", json.dumps(cur))
+
+    def admin_take(self, uid: int, gift_id: str, to_uid: int | None = None):
+        """Подарок со склада → в инвентарь (себе или игроку, например приз за ТОП)."""
+        slug = str(gift_id)[4:]
+        with self.db.tx():
+            if not self.db.one("SELECT 1 FROM nfts WHERE slug=? AND status IN ('house','hold')", (slug,)):
+                raise GameError("not_found")
+            self.user(to_uid or uid)
+            self._give(to_uid or uid, f"nft:{slug}")
 
     def admin_ban(self, uid: int, banned: bool):
         self.db.run("UPDATE users SET banned=? WHERE id=?", (1 if banned else 0, int(uid)))
@@ -956,7 +985,7 @@ class Game(PvpMixin):
             out.append({**self.public_user(r), "value": r["total"], "nft": top})
         players = self.db.one("SELECT COUNT(DISTINCT user_id) c FROM transactions WHERE type='fee' AND created>=?", (start,))["c"]
         n = datetime.fromtimestamp(start, tz=timezone.utc).month
-        return {"season": n, "start": start * 1000, "end": end * 1000, "players": players, "top": out}
+        return {"season": n, "start": start * 1000, "end": end * 1000, "players": players, "top": out, "prizes": self.prizes()}
 
     # ---------------- админка ----------------
     def admin_add_balance(self, uid: int, amount: int):
@@ -966,6 +995,8 @@ class Game(PvpMixin):
             self._add_tx(uid, "bonus" if amount > 0 else "wd", abs(amount), item="admin")
 
     def admin_give_gift(self, uid: int, gift_id: str):
+        if gift_id.startswith("nft:"):   # настоящий NFT со склада (например, приз за ТОП)
+            return self.admin_take(uid, gift_id)
         if gift_id not in self.by_id:
             raise GameError("not_found")
         self.user(uid)

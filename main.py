@@ -249,7 +249,13 @@ def build_router(game: Game, services: Services | None = None) -> Router:
             game.set_setting("biz:user", bc.user.id)
         elif game.setting("biz:conn") == bc.id:
             game.set_setting("biz:conn", "")
-        await tell_admins(bc.bot, ("✅ Аккаунт подключён — подарки, отправленные ему в личку, попадут игрокам в инвентарь.\n"
+        added = 0
+        if bc.is_enabled and can and services:
+            try:
+                added = await services.sync_stock()
+            except Exception as e:  # noqa: BLE001
+                log.warning("sync stock: %s", e)
+        await tell_admins(bc.bot, (f"✅ Аккаунт подключён (на склад добавлено подарков: {added}) — подарки, отправленные ему в личку, попадут игрокам в инвентарь.\n"
                                    + ("" if can else "⚠️ Включи боту право «Подарки и звёзды → передача подарков», иначе вывод NFT не сработает."))
                           if bc.is_enabled else "❌ Аккаунт отключён от бота — приём NFT остановлен.")
 
@@ -611,34 +617,13 @@ def admin_user(request) -> int:
     return uid
 
 
-async def sync_stock(request) -> int:
-    """Все NFT с подключённого аккаунта, которых ещё нет в боте, → на склад."""
-    game: Game = request.app["game"]
-    conn = game.setting("biz:conn")
-    if not conn:
-        raise GameError("not_ready")
-    added, offset = 0, None
-    for _ in range(20):
-        res = await request.app["bot"].get_business_account_gifts(business_connection_id=conn, offset=offset, limit=100)
-        for og in res.gifts:
-            g = getattr(og, "gift", None)
-            if getattr(og, "type", "") != "unique" or not g or not og.owned_gift_id:
-                continue
-            added += game.nft_stock(g.name, g.base_name, g.number, g.model.name if g.model else "",
-                                    g.backdrop.name if g.backdrop else "", og.owned_gift_id, conn)
-        offset = res.next_offset
-        if not offset:
-            break
-    return added
-
-
 async def h_admin(request):
     admin_user(request)
     return ok(request.app["game"].admin_overview())
 
 
 async def h_admin_act(request):
-    admin_user(request)
+    uid = admin_user(request)
     game: Game = request.app["game"]
     b = await body(request)
     act, extra = str(b.get("action") or ""), {}
@@ -656,13 +641,18 @@ async def h_admin_act(request):
     elif act == "lock":
         game.admin_lock(str(b.get("id") or ""), bool(b.get("locked")))
     elif act == "sync":
-        try:
-            extra["added"] = await sync_stock(request)
-        except GameError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            log.warning("sync stock: %s", e)
-            return fail("check_failed")
+        if not game.setting("biz:conn"):
+            extra["error"] = "Аккаунт не подключён к боту"
+        else:
+            try:
+                extra["added"] = await request.app["services"].sync_stock()
+            except Exception as e:  # noqa: BLE001 — показываем админу настоящую причину
+                log.warning("sync stock: %s", e)
+                extra["error"] = f"Telegram не отдал подарки: {e}"[:300]
+    elif act == "prize":
+        game.admin_prize(str(b.get("id") or ""))
+    elif act == "take":
+        game.admin_take(uid, str(b.get("id") or ""), int(b.get("to") or 0) or None)
     elif act == "user":
         extra["found"] = game.admin_user(b.get("q") or "")
     elif act == "stars":

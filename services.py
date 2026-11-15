@@ -43,6 +43,8 @@ class Services:
         self.tasks = [asyncio.create_task(self._loop(self._pvp_step, 1, "pvp"))]
         if config.GIFTS_SOURCE == "telegram" and self.bot:
             self.tasks.append(asyncio.create_task(self._loop(self.sync_gifts, config.GIFTS_SYNC_MINUTES * 60, "gifts")))
+        if self.bot:
+            self.tasks.append(asyncio.create_task(self._loop(self.sync_stock, 300, "nft stock")))
         if config.NFT_FLOORS_URL:
             self.tasks.append(asyncio.create_task(self._loop(self.sync_floors, config.NFT_FLOORS_MINUTES * 60, "nft floors")))
         if config.TON_WALLET:
@@ -68,6 +70,27 @@ class Services:
     # =====================================================================
     #  PvP: разыгрываем раунды, даже если никто не смотрит на экран
     # =====================================================================
+    async def sync_stock(self) -> int:
+        """Все NFT с подключённого аккаунта, которых ещё нет в боте, → на склад."""
+        conn = self.game.setting("biz:conn")
+        if not conn or not self.bot:
+            return 0
+        added, offset = 0, None
+        for _ in range(20):
+            res = await self.bot.get_business_account_gifts(business_connection_id=conn, offset=offset, limit=100)
+            for og in res.gifts:
+                g = getattr(og, "gift", None)
+                if getattr(og, "type", "") != "unique" or not g or not og.owned_gift_id:
+                    continue
+                added += self.game.nft_stock(g.name, g.base_name, g.number, g.model.name if g.model else "",
+                                             g.backdrop.name if g.backdrop else "", og.owned_gift_id, conn)
+            offset = res.next_offset
+            if not offset:
+                break
+        if added:
+            log.info("склад: добавлено NFT с аккаунта: %s", added)
+        return added
+
     async def sync_floors(self) -> int:
         """Флоры NFT-коллекций из NFT_FLOORS_URL → цены в звёздах."""
         d = await self._get_json(config.NFT_FLOORS_URL)
