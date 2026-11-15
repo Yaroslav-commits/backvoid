@@ -36,9 +36,18 @@ WEBAPP_DIR = os.getenv("WEBAPP_DIR", "")
 # С каких сайтов можно ходить в API (GitHub Pages и т.п.). * — с любых
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
-DB_PATH = Path(os.getenv("DB_PATH", ROOT / "voidplay.db"))
-AVATAR_DIR = Path(os.getenv("AVATAR_DIR", ROOT / "avatars"))
-GIFT_DIR = Path(os.getenv("GIFT_DIR", ROOT / "gift_images"))   # кэш картинок подарков из Telegram
+# Всё, что нельзя терять, лежит в папке data/ (база, кэш аватарок). При обновлении бота эту папку НЕ трогай
+DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
+DB_PATH = Path(os.getenv("DB_PATH", DATA_DIR / "voidplay.db"))
+AVATAR_DIR = Path(os.getenv("AVATAR_DIR", DATA_DIR / "avatars"))
+GIFT_DIR = Path(os.getenv("GIFT_DIR", DATA_DIR / "gift_images"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+# Переезд со старой версии: база лежала рядом с кодом — один раз переносим её в data/
+if not DB_PATH.exists() and (ROOT / "voidplay.db").exists() and "DB_PATH" not in os.environ:
+    import shutil
+    for _ext in ("", "-wal", "-shm"):
+        if (ROOT / f"voidplay.db{_ext}").exists():
+            shutil.move(str(ROOT / f"voidplay.db{_ext}"), str(DATA_DIR / f"voidplay.db{_ext}"))   # кэш картинок подарков из Telegram
 
 # Канал для задания «подпишись». Бот должен быть админом канала
 CHANNEL = os.getenv("CHANNEL", "@testkanalbot")
@@ -51,16 +60,19 @@ ADMIN_IDS = [6378471773]
 
 # Экономика (1 звезда в игре = 1 Telegram Star)
 # «Первый заработок без вложений»: новичок сразу получает стартовые звёзды
-WELCOME_BONUS = int(os.getenv("WELCOME_BONUS", "10"))
-SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "15"))
-DAILY_REWARD = int(os.getenv("DAILY_REWARD", "5"))
-REF_PERCENT = int(os.getenv("REF_PERCENT", "5"))          # % с пополнений приглашённых
-REF_PER_FRIEND = int(os.getenv("REF_PER_FRIEND", "10"))    # бонус за первое пополнение друга
+WELCOME_BONUS = int(os.getenv("WELCOME_BONUS", "5"))
+SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "10"))
+DAILY_REWARD = int(os.getenv("DAILY_REWARD", "3"))
+# Ежедневный бонус только тем, кто пополнял хотя бы на эту сумму (0 — всем). Иначе его собирают с фейков каждый день
+DAILY_MIN_DEPOSIT = int(os.getenv("DAILY_MIN_DEPOSIT", "50"))
+REF_PERCENT = int(os.getenv("REF_PERCENT", "10"))         # % с твоей комиссии, которую приносят приглашённые (см. LEVELS)
+REF_PER_FRIEND = int(os.getenv("REF_PER_FRIEND", "0"))     # бонус за первое пополнение друга (звёзды «из воздуха» — лучше 0)
 MIN_DEPOSIT = int(os.getenv("MIN_DEPOSIT", "1"))
 MIN_WITHDRAW = int(os.getenv("MIN_WITHDRAW", "100"))
 HOUSE_EDGE = float(os.getenv("HOUSE_EDGE", "0.10"))       # комиссия апгрейдера
 MAX_CHANCE = float(os.getenv("MAX_CHANCE", "0.75"))       # максимальный шанс апгрейда
 MIN_BET = int(os.getenv("MIN_BET", "1"))
+MAX_BET = int(os.getenv("MAX_BET", "5000"))             # максимальная ставка в Минах (чтобы один игрок не снял всю кассу)
 MINES_EDGE = float(os.getenv("MINES_EDGE", "0.03"))       # комиссия в Минах
 # Апгрейдер: ставка не больше этой доли от цены цели (0.8 → за подарок в 1000 ⭐ максимум 800 ⭐),
 # чтобы не было апгрейдов «x1 и ниже»
@@ -68,9 +80,9 @@ UPGRADE_MAX_RATIO = float(os.getenv("UPGRADE_MAX_RATIO", "0.8"))
 
 # ---------- PvP (Рулетка, Огонь и лёд) ----------
 # Комиссия берётся только с выигрыша (со ставок проигравших) — победитель никогда не уходит в минус
-PVP_FEE = float(os.getenv("PVP_FEE", "0.10"))
+PVP_FEE = float(os.getenv("PVP_FEE", "0"))   # 0 — в PvP комиссии нет, проект зарабатывает на выводе
 PVP_ROUND_SECONDS = int(os.getenv("PVP_ROUND_SECONDS", "20"))   # таймер раунда после входа второго игрока
-PVP_SHOW_SECONDS = int(os.getenv("PVP_SHOW_SECONDS", "9"))      # сколько показываем результат до нового раунда
+PVP_SHOW_SECONDS = int(os.getenv("PVP_SHOW_SECONDS", "13"))     # пауза между раундами: ~7 с крутится колесо + показ победителя
 PVP_MIN_BET = int(os.getenv("PVP_MIN_BET", "1"))
 PVP_MAX_BET = int(os.getenv("PVP_MAX_BET", "50000"))
 PVP_MAX_PLAYERS = int(os.getenv("PVP_MAX_PLAYERS", "30"))
@@ -90,13 +102,23 @@ GIFT_MAX_PRICE = int(os.getenv("GIFT_MAX_PRICE", "0"))           # 0 — без 
 # Адрес твоего TON-кошелька, куда приходят пополнения. Пусто — оплата TON выключена
 TON_WALLET = os.getenv("TON_WALLET", "UQDSyfkCHWx7UZ40fJ9L2ZCL1tWFH0Kjf0wCau-mXVNTILhz")
 TONCENTER_KEY = os.getenv("TONCENTER_KEY", "")           # необязательно: ключ toncenter.com (без него тоже работает)
-STAR_USD = float(os.getenv("STAR_USD", "0.03"))          # сколько $ стоит 1 звезда при пополнении в TON
+STAR_USD = float(os.getenv("STAR_USD", "0.01537"))          # сколько $ стоит 1 звезда при пополнении в TON
 TON_FEE = float(os.getenv("TON_FEE", "0"))               # твоя комиссия с пополнений в TON (0.05 = 5%)
 TON_USD = float(os.getenv("TON_USD", "0"))               # запасной курс TON в $, если биржа не отвечает (0 — нет)
 TON_MIN_STARS = int(os.getenv("TON_MIN_STARS", "50"))    # минимальное пополнение в TON, в звёздах
 
 # ---------- Вывод и NFT-подарки ----------
 WITHDRAW_FEE = float(os.getenv("WITHDRAW_FEE", "0.03"))            # твоя комиссия с любого вывода (0.03 = 3%)
+# Вывод звёзд — только в TON, заявку оплачивает админ со своего кошелька.
+# Сколько $ платим за 1 звезду при выводе. ВАЖНО: за звёзды, купленные через Telegram Stars, Telegram отдаёт тебе ~$0.013,
+# поэтому ставить больше 0.013 можно, только если пополнение принимается в основном в TON
+WITHDRAW_STAR_USD = float(os.getenv("WITHDRAW_STAR_USD", "0.013"))
+WITHDRAW_MIN_DEPOSIT = int(os.getenv("WITHDRAW_MIN_DEPOSIT", "50"))   # вывод доступен после пополнений на эту сумму (защита от ферм бонусов)
+# Во сколько $ считаем звезду, когда переводим рыночные цены NFT (в TON) в звёзды. Должно совпадать с курсом вывода:
+# если поставить больше, NFT в магазине станут дешевле рынка и их будут скупать за Telegram Stars в убыток тебе
+NFT_STAR_USD = float(os.getenv("NFT_STAR_USD", str(WITHDRAW_STAR_USD)))
+# Пост в канал о крупных выигрышах в PvP: от какого банка (0 — выключено). Бот должен быть админом канала CHANNEL
+PVP_ANNOUNCE_MIN = int(os.getenv("PVP_ANNOUNCE_MIN", "500"))
 NFT_TRANSFER_STARS = int(os.getenv("NFT_TRANSFER_STARS", "25"))    # сколько звёзд Telegram берёт за передачу NFT (платит игрок)
 # Необязательно: адрес JSON с флорами коллекций ({"Plush Pepe": 1234.5, ...} или [{"name":..,"floor":..}]) — цены обновятся сами.
 # Без него цены задаются командой /floor
@@ -106,7 +128,7 @@ NFT_PRICE_FACTOR = float(os.getenv("NFT_PRICE_FACTOR", "0.95"))    # цена в
 # Бесплатный вариант: цены с маркета Portals. Нужна строка авторизации «tma ...» (как получить — команда /portals в боте).
 # Её можно задать и прямо из бота: /portals tma ... — тогда перезапуск не нужен
 PORTALS_AUTH = os.getenv("PORTALS_AUTH", "")
-PORTALS_URL = "https://portals-market.com/api/collections/floors"
+PORTALS_URL = os.getenv("PORTALS_URL", "https://portal-market.com/api/collections/floors")
 NFT_FLOORS_URL = os.getenv("NFT_FLOORS_URL", "https://giftasset.gifts/api/v1/gifts/get_gifts_price_list" if GIFTASSET_KEY else "")
 NFT_FLOORS_UNIT = os.getenv("NFT_FLOORS_UNIT", "ton")              # в чём цены в этом JSON: ton или stars
 NFT_FLOORS_MINUTES = int(os.getenv("NFT_FLOORS_MINUTES", "30"))
@@ -117,23 +139,8 @@ GAMES = {"upgrade": "Апгрейдер", "mines": "Мины", "roulette": "PvP 
 # Разработка: принимать запросы без подписи Telegram (только для локальных тестов!)
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 
-GIFTS = [
-    ("pepe", "Plush Pepe", 194999),
-    ("gift-126", "NFT #126", 6500),
-    ("gift-128", "NFT #128", 4400),
-    ("gift-127", "NFT #127", 2800),
-    ("gift-129", "NFT #129", 2500),
-    ("gift-004", "NFT #004", 2200),
-    ("gift-074", "NFT #074", 1999),
-    ("gift-090", "NFT #090", 1350),
-    ("gift-020", "NFT #020", 1200),
-    ("gift-065", "NFT #065", 1060),
-    ("gift-023", "NFT #023", 950),
-    ("gift-047", "NFT #047", 750),
-    ("gift-132", "NFT #132", 680),
-    ("gift-103", "NFT #103", 500),
-    ("gift-120", "NFT #120", 450),
-]
+# Запасной ручной каталог (только для GIFTS_SOURCE=manual). В обычном режиме подарки — настоящие NFT со склада бота
+GIFTS: list[tuple[str, str, int]] = []
 
 CATALOG = [{"id": i, "name": n, "price": p, "img": f"img/gifts/{i}.webp"} for i, n, p in GIFTS]
 BY_ID = {g["id"]: g for g in CATALOG}
@@ -147,20 +154,20 @@ PACKS = [
 
 # Задания. kind — чем меряется прогресс (см. game.task_progress)
 TASKS = [
-    {"id": "bets5", "title": "Сделай 5 ставок", "text": "Сыграй 5 раз в любой игре — хоть по 1 ⭐", "kind": "bets", "goal": 5, "reward": 10},
-    {"id": "sub", "title": "Подписка", "text": "Подпишись на канал Void Play", "kind": "subscribed", "goal": 1, "reward": 5},
-    {"id": "dep1", "title": "Первое пополнение", "text": "Пополни баланс на любую сумму", "kind": "deposits", "goal": 1, "reward": 20},
-    {"id": "ref3", "title": "Пригласи друзей", "text": "Пригласи 3 друзей по своей ссылке", "kind": "referrals", "goal": 3, "reward": 50},
+    {"id": "bets5", "title": "Сделай 5 ставок", "text": "Сыграй 5 раз в любой игре", "kind": "bets", "goal": 5, "reward": 5},
+    {"id": "dep1", "title": "Пополни баланс", "text": "Пополни баланс на 50 ⭐ или больше", "kind": "deposit_sum", "goal": 50, "reward": 10},
+    {"id": "ref3", "title": "Пригласи друзей", "text": "Пригласи 3 друзей, которые пополнят баланс", "kind": "referrals", "goal": 3, "reward": 30},
 ]
 
-# Уровни рефералки: с какого оборота депозитов рефералов и какой %
+# Уровни рефералки: с какого оборота депозитов рефералов и какой % ОТ КОМИССИИ ПРОЕКТА получает пригласивший.
+# Платится только из уже заработанного (с комиссии на вывод), поэтому в минус увести не может
 LEVELS = [
-    {"n": 1, "pct": 5, "from": 0},
-    {"n": 2, "pct": 7, "from": 1000},
-    {"n": 3, "pct": 10, "from": 5000},
-    {"n": 4, "pct": 12, "from": 15000},
-    {"n": 5, "pct": 15, "from": 50000},
-    {"n": 6, "pct": 20, "from": 150000},
+    {"n": 1, "pct": 10, "from": 0},
+    {"n": 2, "pct": 15, "from": 1000},
+    {"n": 3, "pct": 20, "from": 5000},
+    {"n": 4, "pct": 25, "from": 15000},
+    {"n": 5, "pct": 30, "from": 50000},
+    {"n": 6, "pct": 40, "from": 150000},
 ]
 
 

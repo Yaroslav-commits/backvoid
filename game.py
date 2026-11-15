@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import sqlite3
 import threading
@@ -416,7 +417,8 @@ class Game(PvpMixin):
             "users": one("SELECT COUNT(*) s FROM users"), "usersDay": one("SELECT COUNT(*) s FROM users WHERE created>=?", (t - 86400,)),
             "deposits": one("SELECT COALESCE(SUM(amount),0) s FROM payments"),
             "balances": one("SELECT COALESCE(SUM(balance),0) s FROM users"),
-            "withdrawals": [{"id": r["tid"], "amount": r["tamount"], "fee": int((r["textra"] or "fee:0").split(":")[-1] or 0),
+            "cash": self.cash(),
+            "withdrawals": [{"id": r["tid"], "amount": r["tamount"], **{k: self.wd_meta(r["textra"]).get(k) for k in ("fee", "ton", "wallet")},
                              "method": r["tcur"], "date": r["tcreated"] * 1000, "user": self.public_user(r)} for r in wds],
             "stock": self.shop(priced=False),
             "nfts": {r["status"]: r["c"] for r in self.db.q("SELECT status, COUNT(*) c FROM nfts GROUP BY status")},
@@ -430,13 +432,16 @@ class Game(PvpMixin):
             r = self.db.one("SELECT * FROM transactions WHERE id=? AND type='wd' AND status='pending'", (int(tx_id),))
             if not r:
                 raise GameError("not_found")
-            fee = int((r["extra"] or "fee:0").split(":")[-1] or 0)
+            meta = self.wd_meta(r["extra"])
+            fee, ref = meta.get("fee") or 0, meta.get("ref") or 0
             self.db.run("UPDATE transactions SET status=? WHERE id=?", ("done" if done else "rejected", r["id"]))
             if not done:
                 self._change_balance(r["user_id"], r["amount"])
-                if fee:
-                    self.db.run("INSERT INTO house (game, amount, created) VALUES (?,?,?)", ("withdraw", -fee, now()))
-        return {"user_id": r["user_id"], "amount": r["amount"], "pay": r["amount"] - fee}
+                if ref and meta.get("ref_uid"):   # забираем обратно долю пригласившего
+                    self.db.run("UPDATE users SET balance=balance-? WHERE id=?", (ref, meta["ref_uid"]))
+                if fee - ref:
+                    self.db.run("INSERT INTO house (game, amount, created) VALUES (?,?,?)", ("withdraw", -(fee - ref), now()))
+        return {"user_id": r["user_id"], "amount": r["amount"], "pay": r["amount"] - fee, "ton": meta.get("ton")}
 
     def admin_user(self, query: str) -> dict:
         q = str(query).strip().lstrip("@")
@@ -658,8 +663,10 @@ class Game(PvpMixin):
             return self.user(uid)["subscribed"]
         if kind == "deposits":
             return self.db.one("SELECT COUNT(*) c FROM transactions WHERE user_id=? AND type='dep'", (uid,))["c"]
-        if kind == "referrals":
-            return self.db.one("SELECT COUNT(*) c FROM users WHERE referrer=?", (uid,))["c"]
+        if kind == "deposit_sum":
+            return self.db.one("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE user_id=?", (uid,))["s"]
+        if kind == "referrals":   # считаются только друзья, которые пополнили баланс
+            return self.db.one("SELECT COUNT(*) c FROM users u WHERE u.referrer=? AND EXISTS (SELECT 1 FROM payments p WHERE p.user_id=u.id)", (uid,))["c"]
         return 0
 
     def tasks(self, uid: int) -> list[dict]:
@@ -696,8 +703,9 @@ class Game(PvpMixin):
                 "houseEdge": config.HOUSE_EDGE, "maxChance": config.MAX_CHANCE, "upgradeMaxRatio": config.UPGRADE_MAX_RATIO,
                 "pvpFee": config.PVP_FEE, "pvpMinBet": config.PVP_MIN_BET, "pvpMaxBet": config.PVP_MAX_BET,
                 "welcomeBonus": config.WELCOME_BONUS, "dailyReward": config.DAILY_REWARD,
-                "withdrawFee": config.WITHDRAW_FEE, "nftTransferStars": config.NFT_TRANSFER_STARS,
-                "minesEdge": config.MINES_EDGE, "minBet": config.MIN_BET, "appName": config.APP_NAME,
+                "withdrawFee": config.WITHDRAW_FEE, "wdMinDeposit": config.WITHDRAW_MIN_DEPOSIT, "dailyMinDeposit": config.DAILY_MIN_DEPOSIT,
+                "deposited": self.db.one("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE user_id=?", (uid,))["s"], "nftTransferStars": config.NFT_TRANSFER_STARS,
+                "minesEdge": config.MINES_EDGE, "minBet": config.MIN_BET, "maxBet": config.MAX_BET, "appName": config.APP_NAME,
             },
         }
 
@@ -723,6 +731,8 @@ class Game(PvpMixin):
             u = self.user(uid)
             if u["last_daily"] == today:
                 raise GameError("already")
+            if config.DAILY_MIN_DEPOSIT and self.db.one("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE user_id=?", (uid,))["s"] < config.DAILY_MIN_DEPOSIT:
+                raise GameError("need_deposit")
             self.db.run("UPDATE users SET last_daily=? WHERE id=?", (today, uid))
             self._change_balance(uid, config.DAILY_REWARD)
             self._add_tx(uid, "bonus", config.DAILY_REWARD, item="daily")
@@ -845,7 +855,7 @@ class Game(PvpMixin):
 
     def mines_start(self, uid: int, stake: int, mines: int) -> dict:
         stake, mines = int(stake), int(mines)
-        if stake < config.MIN_BET or not 1 <= mines <= self.CELLS - 1:
+        if stake < config.MIN_BET or stake > config.MAX_BET or not 1 <= mines <= self.CELLS - 1:
             raise GameError("bad_amount")
         self.require_open("mines")
         with self.db.tx():
@@ -912,7 +922,7 @@ class Game(PvpMixin):
             u = self.user(uid)
             if u["referrer"]:
                 ref = self.referrals(u["referrer"])
-                share = amount * ref["percent"] // 100 + (config.REF_PER_FRIEND if first else 0)
+                share = config.REF_PER_FRIEND if first else 0   # % рефералу идёт с комиссии на вывод (см. withdraw)
                 if share > 0:
                     self._change_balance(u["referrer"], share)
                     self._add_tx(u["referrer"], "ref", share, item=str(uid))
@@ -953,16 +963,54 @@ class Game(PvpMixin):
             raise GameError("not_found")
         return {"status": dep["status"], "credited": dep["credited"]}
 
-    def withdraw(self, uid: int, amount: int, method: str = "stars") -> tuple[int, int]:
-        """Заявка на вывод. С баланса списывается amount, игрок получает amount − комиссия. → (id заявки, комиссия)."""
+    @staticmethod
+    def wd_meta(extra) -> dict:
+        """extra заявки на вывод: JSON {fee, ton, wallet, ref, ref_uid}; у старых заявок — «fee:N»."""
+        try:
+            return json.loads(extra) if extra and extra.startswith("{") else {"fee": int((extra or "fee:0").split(":")[-1] or 0)}
+        except ValueError:
+            return {"fee": 0}
+
+    def cash(self) -> dict:
+        """Касса: сколько звёзд реально внесли игроки и сколько уже ушло (или ждёт) на вывод."""
+        cin = self.db.one("SELECT COALESCE(SUM(amount),0) s FROM payments")["s"]
+        out = self.db.one("SELECT COALESCE(SUM(amount),0) s FROM transactions WHERE type='wd' AND currency IN ('STARS','TON') "
+                          "AND status IN ('pending','done')")["s"]
+        return {"in": cin, "out": out, "left": cin - out}
+
+    def withdraw(self, uid: int, amount: int, wallet: str, ton_usd: float) -> dict:
+        """Заявка на вывод в TON. С баланса списывается amount, игрок получает (amount − комиссия) по курсу вывода."""
+        wallet = str(wallet or "").strip()
         if amount < config.MIN_WITHDRAW:
             raise GameError("bad_amount")
+        if not re.fullmatch(r"[A-Za-z0-9_\-+/]{48}|-?\d:[0-9a-fA-F]{64}", wallet):
+            raise GameError("bad_wallet")
+        if ton_usd <= 0:
+            raise GameError("ton_off")
         fee = int(amount * config.WITHDRAW_FEE)
+        ton = int((amount - fee) * config.WITHDRAW_STAR_USD / ton_usd * 1000) / 1000
+        if ton <= 0:
+            raise GameError("bad_amount")
         with self.db.tx():
+            u = self.user(uid)
+            mine = self.db.one("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE user_id=?", (uid,))["s"]
+            if mine < config.WITHDRAW_MIN_DEPOSIT:
+                raise GameError("need_deposit")
+            if amount > self.cash()["left"]:      # проект никогда не выплачивает больше, чем в него внесли
+                raise GameError("cash")
             self._change_balance(uid, -amount)
-            if fee > 0:
-                self.db.run("INSERT INTO house (game, amount, created) VALUES (?,?,?)", ("withdraw", fee, now()))
-            return self._add_tx(uid, "wd", amount, currency=method.upper(), status="pending", extra=f"fee:{fee}"), fee
+            ref_share, ref_uid = 0, u["referrer"]
+            if ref_uid and fee > 0:               # доля пригласившего — из комиссии, а не «из воздуха»
+                ref_share = fee * self.referrals(ref_uid)["percent"] // 100
+                if ref_share > 0:
+                    self.db.run("UPDATE users SET balance=balance+? WHERE id=?", (ref_share, ref_uid))
+                    self._add_tx(ref_uid, "ref", ref_share, item=str(uid))
+            if fee - ref_share > 0:
+                self.db.run("INSERT INTO house (game, amount, created) VALUES (?,?,?)", ("withdraw", fee - ref_share, now()))
+            self.db.run("UPDATE users SET wallet=? WHERE id=?", (wallet, uid))
+            meta = {"fee": fee, "ton": ton, "wallet": wallet, "ref": ref_share, "ref_uid": ref_uid if ref_share else None}
+            tx = self._add_tx(uid, "wd", amount, currency="TON", status="pending", extra=json.dumps(meta))
+        return {"id": tx, **meta}
 
     # ---------------- лента, лидеры ----------------
     def feed(self, limit: int = 20) -> list[dict]:

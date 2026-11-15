@@ -13,6 +13,11 @@ from pathlib import Path
 
 import aiohttp
 
+try:  # необязательно: запросы «как Chrome» для маркета Portals
+    from curl_cffi import requests as curl_requests
+except ImportError:
+    curl_requests = None
+
 import config
 from game import Game
 from pvp import PVP_GAMES
@@ -26,6 +31,25 @@ EMOJI_NAMES = {
     "🍭": "Леденец", "🎅": "Санта", "⭐": "Звезда", "🌟": "Звезда", "🧁": "Кекс", "🎈": "Шарик", "🍀": "Клевер",
     "🐸": "Лягушка", "🎩": "Шляпа", "👑": "Корона", "🔮": "Шар", "🧪": "Зелье", "🪄": "Палочка", "🎀": "Бант",
 }
+
+
+class _Resp:
+    """Ответ curl_cffi в виде, похожем на ответ aiohttp."""
+    def __init__(self, status, resp):
+        self.status, self._r = status, resp
+
+    def raise_for_status(self):
+        if self.status >= 400:
+            raise RuntimeError(f"HTTP {self.status}")
+
+    async def json(self, **_):
+        return self._r.json()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
 
 
 class Services:
@@ -100,11 +124,16 @@ class Services:
             url = config.PORTALS_URL
             hdr = {"Authorization": portals if portals.startswith("tma ") else f"tma {portals}",
                    "Accept": "application/json, text/plain, */*", "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-                   "Origin": "https://portals-market.com", "Referer": "https://portals-market.com/",
+                   "Origin": url.split("/api/")[0], "Referer": url.split("/api/")[0] + "/",
                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"}
         if not url:
             return 0
-        async with self.http.get(url, headers=hdr) as r:
+        if url == config.PORTALS_URL and curl_requests:
+            resp = await asyncio.to_thread(lambda: curl_requests.get(url, headers=hdr, impersonate="chrome", timeout=15))
+            r = _Resp(resp.status_code, resp)
+        else:
+            r = await self.http.get(url, headers=hdr)
+        async with r:
             if r.status in (401, 403):
                 if url == config.PORTALS_URL and self.bot and time.time() - getattr(self, "_auth_warned", 0) > 6 * 3600:
                     self._auth_warned = time.time()
@@ -123,7 +152,7 @@ class Services:
         if config.NFT_FLOORS_UNIT == "ton":
             if not await self.ton_usd():
                 await self.refresh_ton_rate()
-            k = await self.ton_usd() / config.STAR_USD
+            k = await self.ton_usd() / config.NFT_STAR_USD
         n = 0
         for name, v in items:
             if isinstance(v, dict):
@@ -142,7 +171,31 @@ class Services:
 
     async def _pvp_step(self):
         for g in PVP_GAMES:
-            self.game.pvp_tick(g)
+            if self.game.pvp_tick(g):
+                await self._announce(g)
+
+    async def _announce(self, game: str):
+        """Крупный выигрыш в PvP → пост в канал (бесплатная реклама)."""
+        if not config.PVP_ANNOUNCE_MIN or not self.bot:
+            return
+        r = self.game.db.one("SELECT * FROM pvp_rounds WHERE game=? AND status='done' ORDER BY id DESC LIMIT 1", (game,))
+        if not r or r["pot"] < config.PVP_ANNOUNCE_MIN:
+            return
+        chance = f"{(r['win_chance'] or 0) * 100:.0f}%"
+        if game == "roulette":
+            u = self.game.db.one("SELECT * FROM users WHERE id=?", (int(r["winner"]),))
+            who = f"@{u['username']}" if u and u["username"] else (u["first_name"] if u else "Игрок")
+            text = f"🏆 <b>{who}</b> забрал банк <b>{r['pot']} ⭐</b> в PvP-рулетке с шансом {chance}!"
+        else:
+            side = "🔥 Огонь" if r["winner"] == "fire" else "❄️ Лёд"
+            text = f"⚔️ Победил <b>{side}</b>: банк <b>{r['pot']} ⭐</b> в «Огонь и лёд» (шанс {chance})"
+        try:
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup  # noqa: PLC0415
+            me = await self.bot.me()
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Играть", url=f"https://t.me/{me.username}")]])
+            await self.bot.send_message(config.CHANNEL, text + f"\n\nИграй в {config.APP_NAME} 👇", reply_markup=kb)
+        except Exception as e:  # noqa: BLE001 — бот не админ канала: просто пропускаем
+            log.debug("announce: %s", e)
 
     # =====================================================================
     #  Подарки: каталог и цены из Telegram

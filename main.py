@@ -21,6 +21,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChat,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -60,20 +62,47 @@ def games_kb(game: Game) -> InlineKeyboardMarkup:
         for g, title in config.GAMES.items()])
 
 
-ADMIN_HELP = (
-    "<b>Админка</b>\n"
-    "/games — открыть/закрыть игры кнопками\n"
-    "/close игра · /open игра — то же командой (upgrade, mines, roulette, fireice)\n"
-    "/stats — статистика и заработок\n"
-    "/syncgifts — обновить цены подарков из Telegram сейчас\n"
-    "/addstars id кол-во — начислить/списать звёзды\n"
-    "/givegift id gift_id — выдать подарок\n"
-    "/promo КОД награда активаций — промокод\n"
-    "/floor Коллекция цена — цена NFT-коллекции в ⭐ (например /floor PlushPepe 500000)\n"
-    "/syncprices — обновить цены NFT с маркетов сейчас\n"
-    "/portals — бесплатные авто-цены с маркета Portals\n"
-    "/nft — NFT-подарки в боте, подключение аккаунта, оплата TON"
-)
+# Все команды админа в одном месте: из этого списка собираются /help и меню команд (кнопка «/» в чате с ботом)
+ADMIN_COMMANDS = [
+    ("Обзор", [
+        ("help", "", "этот список команд"),
+        ("stats", "", "статистика: игроки, пополнения, ставки, заработок"),
+        ("nft", "", "проверка: аккаунт для подарков, склад NFT, комиссия, TON"),
+    ]),
+    ("Игры", [
+        ("games", "", "открыть или закрыть игры кнопками"),
+        ("open", "игра", "открыть игру: upgrade, mines, roulette, fireice или all"),
+        ("close", "игра", "закрыть игру (те же названия)"),
+    ]),
+    ("Игроки", [
+        ("addstars", "id кол-во", "начислить игроку звёзды (с минусом — списать)"),
+        ("givegift", "id nft:Название-Номер", "выдать игроку подарок со склада, например приз за ТОП"),
+        ("promo", "КОД награда активаций", "создать промокод на звёзды"),
+    ]),
+    ("Цены NFT", [
+        ("floor", "Коллекция цена", "задать цену коллекции вручную; без параметров — все цены"),
+        ("syncprices", "", "обновить цены с маркета прямо сейчас"),
+        ("portals", "tma …", "подключить авто-цены с Portals; без параметров — инструкция"),
+        ("syncgifts", "", "обновить обычные подарки Telegram (только при GIFTS_SOURCE=telegram)"),
+    ]),
+]
+ADMIN_HELP = "<b>Команды админа</b>\n" + "\n".join(
+    f"\n<b>{group}</b>\n" + "\n".join(f"/{c}{f' <code>{a}</code>' if a else ''} — {d}" for c, a, d in cmds)
+    for group, cmds in ADMIN_COMMANDS
+) + "\n\nЗаявки на вывод, склад подарков, призы ТОПа и поиск игроков — в приложении: Настройки → Админ-панель."
+
+
+async def setup_commands(bot: Bot):
+    """Меню команд: игрокам — только /start и /help, админам — полный список с описаниями."""
+    await bot.set_my_commands([BotCommand(command="start", description="Открыть игру"),
+                               BotCommand(command="help", description="Помощь")])
+    full = [BotCommand(command="start", description="Открыть игру")] + [
+        BotCommand(command=c, description=(d[0].upper() + d[1:])[:250]) for _, cmds in ADMIN_COMMANDS for c, _a, d in cmds]
+    for admin in config.ADMIN_IDS:
+        try:
+            await bot.set_my_commands(full, scope=BotCommandScopeChat(chat_id=admin))
+        except Exception as e:  # noqa: BLE001 — админ ещё не запускал бота
+            log.info("меню команд для %s не поставлено: %s", admin, e)
 
 
 def build_router(game: Game, services: Services | None = None) -> Router:
@@ -137,7 +166,7 @@ def build_router(game: Game, services: Services | None = None) -> Router:
         try:
             uid, gift = (command.args or "").split()
             game.admin_give_gift(int(uid), gift)
-            await message.answer(f"Готово: {game.by_id[gift]['name']} → {uid}")
+            await message.answer(f"Готово: {game.gift_view(gift)['name']} → {uid}")
         except (ValueError, GameError, KeyError) as e:
             ids = ", ".join(f"{g['id']} ({g['name']})" for g in game.catalog[:40])
             await message.answer(f"Ошибка: {e}\nФормат: /givegift user_id gift_id\nПодарки: {ids}")
@@ -175,10 +204,16 @@ def build_router(game: Game, services: Services | None = None) -> Router:
             f"⚔️ PvP: раундов {pvp_bets}, комиссия — рулетка {house.get('roulette', 0)} ⭐, огонь и лёд {house.get('fireice', 0)} ⭐\n"
             f"💸 Заявок на вывод: {wd['c']} на {wd['s']} ⭐\n🎁 Подарков в каталоге: {len(game.catalog)}\n🔴 Закрытые игры: {closed}")
 
-    @r.message(Command("admin"))
-    async def admin_help(message: Message):
+    @r.message(Command("help", "admin"))
+    async def help_cmd(message: Message):
         if is_admin(message):
-            await message.answer(ADMIN_HELP)
+            return await message.answer(ADMIN_HELP)
+        await message.answer(
+            f"<b>{config.APP_NAME}</b> — PvP-игры на звёзды и NFT-подарки.\n\n"
+            "• Жми «Играть», чтобы открыть приложение\n"
+            f"• Чтобы играть подарком, передай свой NFT аккаунту {config.GIFTS_ACCOUNT} — он появится в инвентаре\n"
+            "• Вывод — в TON или подарком, прямо в приложении\n\n"
+            f"Вопросы: {config.SUPPORT_URL}", reply_markup=play_kb())
 
     # ---------- открыть / закрыть игры ----------
     @r.message(Command("games"))
@@ -316,7 +351,7 @@ def build_router(game: Game, services: Services | None = None) -> Router:
                 "1. Открой web.telegram.org в Chrome на компьютере и войди в аккаунт\n"
                 "2. Нажми F12 → вкладка Network\n"
                 "3. Открой в Telegram бота @portals и запусти его приложение\n"
-                "4. В Network найди любой запрос к portals-market.com → Headers → Authorization\n"
+                "4. В Network найди любой запрос к portal-market.com (в фильтре набери portal-market) → Headers → Authorization\n"
                 "5. Скопируй значение целиком (начинается с <code>tma </code>) и отправь мне:\n"
                 "<code>/portals tma ...</code>\n\n"
                 "Строка живёт несколько дней. Когда устареет — я напишу, и её надо будет обновить так же.")
@@ -428,7 +463,9 @@ async def full_state(request: web.Request, uid: int) -> dict:
     st["config"]["botUsername"] = request.app.get("bot_username", "")
     sv: Services = request.app["services"]
     per_ton = await sv.stars_per_ton()
-    st["rates"] = {"usdToStars": round(1 / config.STAR_USD, 2), "tonToStars": per_ton}
+    usd = await sv.ton_usd()
+    st["rates"] = {"usdToStars": round(1 / config.STAR_USD, 2), "tonToStars": per_ton,
+                   "tonOut": round(usd / config.WITHDRAW_STAR_USD, 2) if usd > 0 else 0}   # звёзд за 1 TON при выводе
     st["config"]["admin"] = uid in config.ADMIN_IDS
     st["config"]["ton"] = {"enabled": per_ton > 0, "minStars": config.TON_MIN_STARS}
     return st
@@ -607,23 +644,29 @@ async def h_invoice(request):
 
 
 async def h_withdraw(request):
+    """Вывод звёзд — только в TON: игрок указывает кошелёк, админ переводит вручную."""
     uid = current_user(request)
     b = await body(request)
-    amount = int(b.get("stars") or 0)
-    method = str(b.get("method") or "stars")[:10]
     game: Game = request.app["game"]
-    tx_id, fee = game.withdraw(uid, amount, method)
+    sv: Services = request.app["services"]
+    if not await sv.ton_usd():
+        try:
+            await sv.refresh_ton_rate()
+        except Exception:  # noqa: BLE001
+            pass
+    w = game.withdraw(uid, int(b.get("stars") or 0), b.get("wallet"), await sv.ton_usd())
     u = game.user(uid)
-    text = (f"💸 Заявка на вывод #{tx_id}\n"
+    text = (f"💸 Заявка на вывод #{w['id']}\n"
             f"Игрок: {u['first_name']} @{u['username'] or '—'} (id {uid})\n"
-            f"Списано: {amount} ⭐, способ: {method}\n"
-            f"К выплате: {amount - fee} ⭐ (твоя комиссия {fee} ⭐)")
+            f"Списано: {int(b.get('stars') or 0)} ⭐ (твоя комиссия {w['fee'] - w['ref']} ⭐)\n"
+            f"К выплате: <b>{w['ton']} TON</b>\n<code>{w['wallet']}</code>\n"
+            f"Отметь «выплачено» в админ-панели приложения")
     for admin in config.ADMIN_IDS:
         try:
             await request.app["bot"].send_message(admin, text)
         except Exception:  # noqa: BLE001
             pass
-    return ok(balance=game.balance(uid), id=tx_id)
+    return ok(balance=game.balance(uid), id=w["id"], ton=w["ton"])
 
 
 async def h_nft_withdraw(request):
@@ -668,7 +711,7 @@ async def h_admin_act(request):
     if act in ("wd_done", "wd_reject"):
         r = game.admin_wd(int(b.get("id") or 0), act == "wd_done")
         try:
-            await request.app["bot"].send_message(r["user_id"], f"✅ Вывод {r['pay']} ⭐ выплачен" if act == "wd_done"
+            await request.app["bot"].send_message(r["user_id"], (f"✅ Вывод {r['ton']} TON отправлен на твой кошелёк" if r.get("ton") else f"✅ Вывод {r['pay']} ⭐ выплачен") if act == "wd_done"
                                                   else f"↩️ Заявка на вывод отклонена, {r['amount']} ⭐ вернулись на баланс")
         except Exception:  # noqa: BLE001
             pass
@@ -820,6 +863,11 @@ async def main() -> None:
         await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Играть", web_app=WebAppInfo(url=config.WEBAPP_URL)))
     except Exception as e:  # noqa: BLE001
         log.warning("не удалось поставить кнопку меню: %s", e)
+
+    try:
+        await setup_commands(bot)
+    except Exception as e:  # noqa: BLE001
+        log.warning("не удалось поставить меню команд: %s", e)
 
     await services.start()
     log.info("Бот @%s запущен. Web App: %s", me.username, config.WEBAPP_URL)
