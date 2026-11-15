@@ -70,6 +70,7 @@ ADMIN_HELP = (
     "/givegift id gift_id — выдать подарок\n"
     "/promo КОД награда активаций — промокод\n"
     "/floor Коллекция цена — цена NFT-коллекции в ⭐ (например /floor PlushPepe 500000)\n"
+    "/syncprices — обновить цены NFT с маркетов сейчас\n"
     "/nft — NFT-подарки в боте, подключение аккаунта, оплата TON"
 )
 
@@ -291,6 +292,17 @@ def build_router(game: Game, services: Services | None = None) -> Router:
             return await message.answer(f"Формат: /floor Коллекция цена_в_звёздах\n\nСейчас:\n{lst}")
         game.set_floor(a[0], int(a[1]))
         await message.answer(f"Готово: {game.floor_key(a[0])} = {a[1]} ⭐")
+
+    @r.message(Command("syncprices"))
+    async def syncprices(message: Message):
+        if not is_admin(message):
+            return
+        if not config.NFT_FLOORS_URL:
+            return await message.answer("Авто-цены выключены: задай GIFTASSET_KEY (или NFT_FLOORS_URL) в настройках")
+        try:
+            await message.answer(f"Цены обновлены: {await services.sync_floors()} коллекций")
+        except Exception as e:  # noqa: BLE001
+            await message.answer(f"Не получилось: {e}")
 
     @r.message(Command("nft"))
     async def nft_cmd(message: Message):

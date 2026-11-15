@@ -93,7 +93,13 @@ class Services:
 
     async def sync_floors(self) -> int:
         """Флоры NFT-коллекций из NFT_FLOORS_URL → цены в звёздах."""
-        d = await self._get_json(config.NFT_FLOORS_URL)
+        k_ = config.GIFTASSET_KEY
+        hdr = {"X-API-Key": k_, "x-api-token": k_, "Authorization": f"Bearer {k_}"} if k_ else {}
+        async with self.http.get(config.NFT_FLOORS_URL, headers=hdr) as r:
+            if r.status in (401, 403):
+                raise RuntimeError("источник цен не принял ключ (GIFTASSET_KEY)")
+            r.raise_for_status()
+            d = await r.json(content_type=None)
         if isinstance(d, dict) and len(d) == 1 and isinstance(next(iter(d.values())), (dict, list)):
             d = next(iter(d.values()))   # {"data": {...}}
         items = d.items() if isinstance(d, dict) else [(x.get("name") or x.get("collection") or x.get("title"), x) for x in d if isinstance(x, dict)]
@@ -105,9 +111,11 @@ class Services:
         n = 0
         for name, v in items:
             if isinstance(v, dict):
-                v = next((v[f] for f in ("floor", "floor_price", "floorPrice", "price", "min_price") if v.get(f)), 0)
+                nums = [x for x in v.values() if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0]
+                # цены по маркетам ({"portals": 73.4, "tonnel": 79, ...}) → берём минимальную
+                v = next((v[f] for f in ("floor", "floor_price", "floorPrice", "price", "min_price") if v.get(f)), min(nums) if nums else 0)
             try:
-                price = int(float(v) * k)
+                price = int(float(v) * k * config.NFT_PRICE_FACTOR)
             except (TypeError, ValueError):
                 continue
             if name and price > 0:

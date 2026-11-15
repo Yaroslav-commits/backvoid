@@ -100,7 +100,10 @@ WITHDRAW_FEE = float(os.getenv("WITHDRAW_FEE", "0.03"))            # твоя к
 NFT_TRANSFER_STARS = int(os.getenv("NFT_TRANSFER_STARS", "25"))    # сколько звёзд Telegram берёт за передачу NFT (платит игрок)
 # Необязательно: адрес JSON с флорами коллекций ({"Plush Pepe": 1234.5, ...} или [{"name":..,"floor":..}]) — цены обновятся сами.
 # Без него цены задаются командой /floor
-NFT_FLOORS_URL = os.getenv("NFT_FLOORS_URL", "")
+# Авто-цены: ключ Gift Asset (выдают в @giftassetapi). С ключом цены коллекций берутся с маркетов сами (минимальный флор)
+GIFTASSET_KEY = os.getenv("GIFTASSET_KEY", "")
+NFT_PRICE_FACTOR = float(os.getenv("NFT_PRICE_FACTOR", "0.95"))    # цена в боте = флор × этот множитель (0.95 → на 5% ниже рынка)
+NFT_FLOORS_URL = os.getenv("NFT_FLOORS_URL", "https://giftasset.gifts/api/v1/gifts/get_gifts_price_list" if GIFTASSET_KEY else "")
 NFT_FLOORS_UNIT = os.getenv("NFT_FLOORS_UNIT", "ton")              # в чём цены в этом JSON: ton или stars
 NFT_FLOORS_MINUTES = int(os.getenv("NFT_FLOORS_MINUTES", "30"))
 
