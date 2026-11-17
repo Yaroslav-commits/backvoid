@@ -68,10 +68,11 @@ ADMIN_COMMANDS = [
         ("help", "", "этот список команд"),
         ("stats", "", "статистика: игроки, пополнения, ставки, заработок"),
         ("nft", "", "проверка: аккаунт для подарков, склад NFT, комиссия, TON"),
+        ("backup", "", "прислать копию базы прямо сейчас (автоматически — раз в сутки)"),
     ]),
     ("Игры", [
         ("games", "", "открыть или закрыть игры кнопками"),
-        ("open", "игра", "открыть игру: upgrade, mines, roulette, fireice или all"),
+        ("open", "игра", "открыть игру: upgrade, mines, crash, roulette, fireice или all"),
         ("close", "игра", "закрыть игру (те же названия)"),
     ]),
     ("Игроки", [
@@ -204,6 +205,15 @@ def build_router(game: Game, services: Services | None = None) -> Router:
             f"⚔️ PvP: раундов {pvp_bets}, комиссия — рулетка {house.get('roulette', 0)} ⭐, огонь и лёд {house.get('fireice', 0)} ⭐\n"
             f"💸 Заявок на вывод: {wd['c']} на {wd['s']} ⭐\n🎁 Подарков в каталоге: {len(game.catalog)}\n🔴 Закрытые игры: {closed}")
 
+    @r.message(Command("backup"))
+    async def backup_cmd(message: Message):
+        if not is_admin(message) or not services:
+            return
+        try:
+            await services.backup(force=True)
+        except Exception as e:  # noqa: BLE001
+            await message.answer(f"Не получилось: {e}")
+
     @r.message(Command("help", "admin"))
     async def help_cmd(message: Message):
         if is_admin(message):
@@ -307,7 +317,7 @@ def build_router(game: Game, services: Services | None = None) -> Router:
             return
         game.upsert_user(u.model_dump())
         view = game.nft_deposit(u.id, g.name, g.base_name, g.number, g.model.name if g.model else "",
-                                g.backdrop.name if g.backdrop else "", info.owned_gift_id, conn)
+                                g.backdrop.name if g.backdrop else "", info.owned_gift_id, conn, info.transfer_star_count)
         if not view:
             return
         price = f"{view['price']} ⭐" if view["price"] else "цена уточняется"
@@ -430,11 +440,43 @@ async def cors_mw(request: web.Request, handler):
     except Exception:  # noqa: BLE001
         log.exception("api error")
         resp = fail("server", 500)
+        await alert_admins(request.app.get("bot"), f"⚠️ Ошибка на сервере: {request.method} {request.path}\nПодробности — в логах хостинга")
     if request.path.startswith("/api/"):
         for k, v in _cors_headers(request).items():
             if v:
                 resp.headers[k] = v
     return resp
+
+
+_alert_at = 0.0
+
+
+async def alert_admins(bot, text: str):
+    """Сообщить админу о проблеме, но не чаще раза в 10 минут (чтобы не заспамить)."""
+    global _alert_at
+    if not bot or time.time() - _alert_at < 600:
+        return
+    _alert_at = time.time()
+    for a in config.ADMIN_IDS:
+        try:
+            await bot.send_message(a, text)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# Простая защита от спама запросами: не больше 12 действий в секунду с одного аккаунта
+_hits: dict[int, list[float]] = {}
+
+
+def rate_limit(uid: int, per_sec: int = 12):
+    t = time.time()
+    h = [x for x in _hits.get(uid, []) if t - x < 1]
+    if len(h) >= per_sec:
+        raise GameError("slow")
+    h.append(t)
+    _hits[uid] = h
+    if len(_hits) > 50000:
+        _hits.clear()
 
 
 # ---------------- авторизация ----------------
@@ -447,6 +489,8 @@ def current_user(request: web.Request) -> int:
         game.upsert_user({"id": uid, "first_name": f"Dev{uid}", "username": f"dev{uid}"})
         return uid
     data = verify_init_data(init, config.BOT_TOKEN)
+    if request.method == "POST":
+        rate_limit(int(data["user"]["id"]))
     user, _ = game.upsert_user(data["user"], data.get("start_param"))
     return user["id"]
 
@@ -472,7 +516,7 @@ async def full_state(request: web.Request, uid: int) -> dict:
 
 
 # ---------------- эндпоинты ----------------
-VERSION = "2.1"
+VERSION = "3.0"
 
 
 async def h_health(request):
@@ -568,6 +612,34 @@ async def h_pvp_bet(request):
     b = await body(request)
     g = request.app["game"]
     st = g.pvp_bet(uid, str(b.get("game", "")), int(b.get("amount") or 0), b.get("side"), str(b.get("gift") or "") or None)
+    return ok(st, balance=g.balance(uid))
+
+
+# ---------------- Самолётик ----------------
+async def h_crash(request):
+    uid = current_user(request)
+    return ok(request.app["game"].crash_state(uid))
+
+
+async def h_crash_bet(request):
+    uid = current_user(request)
+    b = await body(request)
+    g = request.app["game"]
+    st = g.crash_bet(uid, int(b.get("amount") or 0), b.get("auto") or None)
+    return ok(st, balance=g.balance(uid))
+
+
+async def h_crash_cashout(request):
+    uid = current_user(request)
+    g = request.app["game"]
+    st = g.crash_cashout(uid)
+    return ok(st, balance=g.balance(uid))
+
+
+async def h_crash_cancel(request):
+    uid = current_user(request)
+    g = request.app["game"]
+    st = g.crash_cancel(uid)
     return ok(st, balance=g.balance(uid))
 
 
@@ -676,7 +748,7 @@ async def h_nft_withdraw(request):
     w = game.nft_withdraw(uid, str((await body(request)).get("uid") or ""))
     try:
         await request.app["bot"].transfer_gift(business_connection_id=game.setting("biz:conn") or w["conn_id"], owned_gift_id=w["owned_id"],
-                                               new_owner_chat_id=uid, star_count=config.NFT_TRANSFER_STARS)
+                                               new_owner_chat_id=uid, star_count=w["cost"] or None)
     except Exception as e:  # noqa: BLE001 — Telegram отказал: возвращаем подарок и комиссию
         log.warning("nft withdraw %s: %s", w["slug"], e)
         game.nft_withdraw_undo(uid, w)
@@ -809,6 +881,10 @@ def build_app(game: Game, bot: Bot, services: Services | None = None) -> web.App
     r.add_post("/api/mines/open", h_mines_open)
     r.add_post("/api/mines/cashout", h_mines_cashout)
     r.add_get("/api/pvp", h_pvp)
+    r.add_get("/api/crash", h_crash)
+    r.add_post("/api/crash/bet", h_crash_bet)
+    r.add_post("/api/crash/cashout", h_crash_cashout)
+    r.add_post("/api/crash/cancel", h_crash_cancel)
     r.add_post("/api/pvp/bet", h_pvp_bet)
     r.add_post("/api/pvp/cancel", h_pvp_cancel)
     r.add_post("/api/ton/invoice", h_ton_invoice)
@@ -870,6 +946,20 @@ async def main() -> None:
         log.warning("не удалось поставить меню команд: %s", e)
 
     await services.start()
+    issues = [x for x in (
+        "DEV_MODE включён — любой может играть за чужой аккаунт! Выключи (DEV_MODE=0)" if config.DEV_MODE else "",
+        "ALLOWED_ORIGINS = * — разреши только свой сайт (например https://yaroslav-commits.github.io)" if "*" in config.ALLOWED_ORIGINS else "",
+        "TON_WALLET не задан — пополнение и вывод в TON выключены" if not config.TON_WALLET else "",
+        "CHANNEL указывает на тестовый канал" if "test" in config.CHANNEL.lower() else "",
+        "Аккаунт для подарков не подключён (Telegram для бизнеса → Чат-боты)" if not game.setting("biz:conn") else "",
+        "Нет авто-цен NFT: подключи /portals" if not (config.NFT_FLOORS_URL or config.PORTALS_AUTH or game.setting("portals:auth")) else "",
+    ) if x]
+    for a in config.ADMIN_IDS:
+        try:
+            await bot.send_message(a, f"🟢 <b>{config.APP_NAME}</b> запущен (v{VERSION})\n"
+                                      + ("\n".join(f"⚠️ {x}" for x in issues) if issues else "✅ Настройки в порядке"))
+        except Exception:  # noqa: BLE001
+            pass
     log.info("Бот @%s запущен. Web App: %s", me.username, config.WEBAPP_URL)
     try:
         await bot.delete_webhook(drop_pending_updates=False)

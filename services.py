@@ -64,7 +64,9 @@ class Services:
 
     async def start(self):
         self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12))
-        self.tasks = [asyncio.create_task(self._loop(self._pvp_step, 1, "pvp"))]
+        self.tasks = [asyncio.create_task(self._loop(self._pvp_step, 1, "pvp")),
+                      asyncio.create_task(self._loop(self._crash_step, 0.5, "crash")),
+                      asyncio.create_task(self._loop(self.backup, 3600, "backup"))]
         if config.GIFTS_SOURCE == "telegram" and self.bot:
             self.tasks.append(asyncio.create_task(self._loop(self.sync_gifts, config.GIFTS_SYNC_MINUTES * 60, "gifts")))
         if self.bot:
@@ -107,7 +109,7 @@ class Services:
                 if getattr(og, "type", "") != "unique" or not g or not og.owned_gift_id:
                     continue
                 added += self.game.nft_stock(g.name, g.base_name, g.number, g.model.name if g.model else "",
-                                             g.backdrop.name if g.backdrop else "", og.owned_gift_id, conn)
+                                             g.backdrop.name if g.backdrop else "", og.owned_gift_id, conn, getattr(og, "transfer_star_count", None))
             offset = res.next_offset
             if not offset:
                 break
@@ -168,6 +170,32 @@ class Services:
                 n += 1
         log.info("цены NFT обновлены: %s коллекций", n)
         return n
+
+    async def _crash_step(self):
+        self.game.crash_tick()
+
+    async def backup(self, force: bool = False) -> Path | None:
+        """Копия базы раз в сутки: data/backups/voidplay-ДАТА.db (старые удаляются) + файл админу в Telegram."""
+        day = time.strftime("%Y-%m-%d")
+        if not force and self.game.setting("backup:last") == day:
+            return None
+        folder = config.DATA_DIR / "backups"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"voidplay-{day}.db"
+        await asyncio.to_thread(self.game.db.backup_to, path)
+        self.game.set_setting("backup:last", day)
+        for old in sorted(folder.glob("voidplay-*.db"))[:-max(1, config.BACKUP_KEEP)]:
+            old.unlink(missing_ok=True)
+        self.game.crash_prune()
+        if self.bot and config.BACKUP_TO_ADMIN:
+            from aiogram.types import FSInputFile  # noqa: PLC0415
+            for a in config.ADMIN_IDS:
+                try:
+                    await self.bot.send_document(a, FSInputFile(path), caption=f"🗄 Копия базы за {day}. Храни её — если хостинг потеряет файлы, из неё всё восстанавливается")
+                except Exception as e:  # noqa: BLE001
+                    log.info("копия базы админу %s: %s", a, e)
+        log.info("копия базы: %s", path)
+        return path
 
     async def _pvp_step(self):
         for g in PVP_GAMES:

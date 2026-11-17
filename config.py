@@ -22,11 +22,11 @@ def _ints(v: str) -> list[int]:
 
 
 # Название проекта — меняется в одном месте (бот, сайт берёт его с сервера)
-APP_NAME = os.getenv("APP_NAME", "Void Play")
+APP_NAME = os.getenv("APP_NAME", "AstraRoll")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 # Где открывается Web App (GitHub Pages или этот же домен)
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://yaroslav-commits.github.io/voidplayfiles/")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
@@ -50,20 +50,17 @@ if not DB_PATH.exists() and (ROOT / "voidplay.db").exists() and "DB_PATH" not in
             shutil.move(str(ROOT / f"voidplay.db{_ext}"), str(DATA_DIR / f"voidplay.db{_ext}"))   # кэш картинок подарков из Telegram
 
 # Канал для задания «подпишись». Бот должен быть админом канала
-CHANNEL = os.getenv("CHANNEL", "@testkanalbot")
-CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/testkanalbot")
+CHANNEL = os.getenv("CHANNEL", "@astraroll")
+CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/astraroll")
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/nersew")
 GIFTS_ACCOUNT = os.getenv("GIFTS_ACCOUNT", "@nersew")
 
 # Админы бота (Telegram id), записаны прямо в коде
 ADMIN_IDS = [6378471773]
 
-# Экономика (1 звезда в игре = 1 Telegram Star)
-# «Первый заработок без вложений»: новичок сразу получает стартовые звёзды
 WELCOME_BONUS = int(os.getenv("WELCOME_BONUS", "5"))
 SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "10"))
 DAILY_REWARD = int(os.getenv("DAILY_REWARD", "3"))
-# Ежедневный бонус только тем, кто пополнял хотя бы на эту сумму (0 — всем). Иначе его собирают с фейков каждый день
 DAILY_MIN_DEPOSIT = int(os.getenv("DAILY_MIN_DEPOSIT", "50"))
 REF_PERCENT = int(os.getenv("REF_PERCENT", "10"))         # % с твоей комиссии, которую приносят приглашённые (см. LEVELS)
 REF_PER_FRIEND = int(os.getenv("REF_PER_FRIEND", "0"))     # бонус за первое пополнение друга (звёзды «из воздуха» — лучше 0)
@@ -87,11 +84,6 @@ PVP_MIN_BET = int(os.getenv("PVP_MIN_BET", "1"))
 PVP_MAX_BET = int(os.getenv("PVP_MAX_BET", "50000"))
 PVP_MAX_PLAYERS = int(os.getenv("PVP_MAX_PLAYERS", "30"))
 
-# ---------- Цены подарков ----------
-# telegram — каталог и цены сами подтягиваются из Telegram (официальный список подарков и их цены в звёздах),
-#            список GIFTS ниже нужен только как запасной, пока Telegram не ответил
-# manual   — только список GIFTS ниже
-# nft      — только настоящие NFT со склада бота (проигранные игроками и лежащие на твоём аккаунте). Рекомендуется
 GIFTS_SOURCE = os.getenv("GIFTS_SOURCE", "nft")
 SHOP_MARKUP = float(os.getenv("SHOP_MARKUP", "0.05"))            # наценка магазина подарков к цене коллекции
 GIFTS_SYNC_MINUTES = int(os.getenv("GIFTS_SYNC_MINUTES", "30"))  # как часто обновлять цены
@@ -133,8 +125,22 @@ NFT_FLOORS_URL = os.getenv("NFT_FLOORS_URL", "https://giftasset.gifts/api/v1/gif
 NFT_FLOORS_UNIT = os.getenv("NFT_FLOORS_UNIT", "ton")              # в чём цены в этом JSON: ton или stars
 NFT_FLOORS_MINUTES = int(os.getenv("NFT_FLOORS_MINUTES", "30"))
 
+# ---------- Самолётик (краш): игрок против проекта ----------
+# Преимущество проекта: в среднем с каждых 1000 ⭐ ставок остаётся CRASH_EDGE × 1000 (0.04 → 40 ⭐). Открыто и честно
+CRASH_EDGE = float(os.getenv("CRASH_EDGE", "0.04"))
+CRASH_BET_SECONDS = int(os.getenv("CRASH_BET_SECONDS", "8"))      # приём ставок перед взлётом
+CRASH_SHOW_SECONDS = int(os.getenv("CRASH_SHOW_SECONDS", "4"))    # пауза после краша
+CRASH_RATE = float(os.getenv("CRASH_RATE", "0.0001"))             # скорость роста: x2 через ~7 с, x10 через ~23 с
+CRASH_MAX_MULT = float(os.getenv("CRASH_MAX_MULT", "100"))        # дальше самолётик не летит
+CRASH_MAX_BET = int(os.getenv("CRASH_MAX_BET", "1000"))           # максимальная ставка
+CRASH_MAX_WIN = int(os.getenv("CRASH_MAX_WIN", "20000"))          # потолок выплаты одной ставки
+
+# Автокопии базы: раз в сутки в data/backups (хранится BACKUP_KEEP штук) + файл приходит админу в Telegram
+BACKUP_KEEP = int(os.getenv("BACKUP_KEEP", "14"))
+BACKUP_TO_ADMIN = os.getenv("BACKUP_TO_ADMIN", "1") == "1"
+
 # Игры, которые можно открывать/закрывать из бота: /games
-GAMES = {"upgrade": "Апгрейдер", "mines": "Мины", "roulette": "PvP Рулетка", "fireice": "PvP Огонь и лёд"}
+GAMES = {"upgrade": "Апгрейдер", "mines": "Мины", "crash": "Самолётик", "roulette": "PvP Рулетка", "fireice": "PvP Огонь и лёд"}
 
 # Разработка: принимать запросы без подписи Telegram (только для локальных тестов!)
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
