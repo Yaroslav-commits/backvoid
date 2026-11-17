@@ -365,7 +365,7 @@ def build_router(game: Game, services: Services | None = None) -> Router:
     async def syncprices(message: Message):
         if not is_admin(message):
             return
-        if not (config.NFT_FLOORS_URL or config.API_PORTALS_AUTH or game.setting("portals:auth")):
+        if not (config.NFT_FLOORS_URL or config.PORTALS_AUTH or game.setting("portals:auth")):
             return await message.answer("Авто-цены выключены. Бесплатно: /portals · платно: GIFTASSET_KEY в настройках")
         try:
             await message.answer(f"Цены обновлены: {await services.sync_floors()} коллекций")
@@ -974,7 +974,7 @@ async def main() -> None:
     issues = [x for x in (
         (f"Порт {config.API_PORT} занят (его держит сам хостинг) — API запущен на порту {api_port}. "
          f"Сайт не достучится до бота, пока домен хостинга не ведёт на этот порт: укажи {api_port} в настройках домена/порта в панели хостинга "
-         f"или задай свободный порт переменной PORT") if api_port and api_port != config.API_PORT else "",
+         f"и задай переменную API_PORT={api_port}, чтобы порт не менялся") if api_port and api_port != config.API_PORT else "",
         f"API не запустился: порты {config.API_PORT}–{config.API_PORT + 10} заняты. Бот в Telegram работает, а приложение — нет. Задай свободный порт переменной PORT"
         if not api_port else "",
         "DEV_MODE включён — любой может играть за чужой аккаунт! Выключи (DEV_MODE=0)" if config.DEV_MODE else "",
@@ -982,7 +982,7 @@ async def main() -> None:
         "TON_WALLET не задан — пополнение и вывод в TON выключены" if not config.TON_WALLET else "",
         "CHANNEL указывает на тестовый канал" if "test" in config.CHANNEL.lower() else "",
         "Аккаунт для подарков не подключён (Telegram для бизнеса → Чат-боты)" if not game.setting("biz:conn") else "",
-        "Нет авто-цен NFT: подключи /portals" if not (config.NFT_FLOORS_URL or config.API_PORTALS_AUTH or game.setting("portals:auth")) else "",
+        "Нет авто-цен NFT: подключи /portals" if not (config.NFT_FLOORS_URL or config.PORTALS_AUTH or game.setting("portals:auth")) else "",
     ) if x]
     for a in config.ADMIN_IDS:
         try:
