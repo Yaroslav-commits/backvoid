@@ -106,6 +106,28 @@ async def setup_commands(bot: Bot):
             log.info("меню команд для %s не поставлено: %s", admin, e)
 
 
+async def start_api(runner: web.AppRunner) -> int | None:
+    """Запускает API. Если порт занят (часто его держит сам хостинг) — ждём и пробуем соседние порты.
+    Бот в Telegram работает в любом случае, даже если API не поднялся. → порт или None."""
+    for attempt in range(3):   # прошлый процесс бота мог ещё не освободить порт
+        try:
+            await web.TCPSite(runner, config.HOST, config.API_PORT).start()
+            log.info("API слушает %s:%s", config.HOST, config.API_PORT)
+            return config.API_PORT
+        except OSError as e:
+            log.warning("порт %s занят (%s), попытка %s/3", config.API_PORT, e.strerror, attempt + 1)
+            await asyncio.sleep(2)
+    for port in range(config.API_PORT + 1, config.API_PORT + 11):
+        try:
+            await web.TCPSite(runner, config.HOST, port).start()
+            log.warning("API слушает %s:%s — порт %s занят другим процессом", config.HOST, port, config.API_PORT)
+            return port
+        except OSError:
+            continue
+    log.error("API не запущен: порты %s–%s заняты", config.API_PORT, config.API_PORT + 10)
+    return None
+
+
 def build_router(game: Game, services: Services | None = None) -> Router:
     r = Router()
 
@@ -343,7 +365,7 @@ def build_router(game: Game, services: Services | None = None) -> Router:
     async def syncprices(message: Message):
         if not is_admin(message):
             return
-        if not (config.NFT_FLOORS_URL or config.PORTALS_AUTH or game.setting("portals:auth")):
+        if not (config.NFT_FLOORS_URL or config.API_PORTALS_AUTH or game.setting("portals:auth")):
             return await message.answer("Авто-цены выключены. Бесплатно: /portals · платно: GIFTASSET_KEY в настройках")
         try:
             await message.answer(f"Цены обновлены: {await services.sync_floors()} коллекций")
@@ -926,14 +948,17 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(build_router(game, services))
 
-    me = await bot.get_me()
+    try:
+        me = await bot.get_me()
+    except Exception:
+        await bot.session.close()
+        raise
     app = build_app(game, bot, services)
     app["bot_username"] = me.username
 
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, config.HOST, config.PORT).start()
-    log.info("API слушает %s:%s", config.HOST, config.PORT)
+    api_port = await start_api(runner)
 
     try:
         await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Играть", web_app=WebAppInfo(url=config.WEBAPP_URL)))
@@ -947,12 +972,17 @@ async def main() -> None:
 
     await services.start()
     issues = [x for x in (
+        (f"Порт {config.API_PORT} занят (его держит сам хостинг) — API запущен на порту {api_port}. "
+         f"Сайт не достучится до бота, пока домен хостинга не ведёт на этот порт: укажи {api_port} в настройках домена/порта в панели хостинга "
+         f"или задай свободный порт переменной PORT") if api_port and api_port != config.API_PORT else "",
+        f"API не запустился: порты {config.API_PORT}–{config.API_PORT + 10} заняты. Бот в Telegram работает, а приложение — нет. Задай свободный порт переменной PORT"
+        if not api_port else "",
         "DEV_MODE включён — любой может играть за чужой аккаунт! Выключи (DEV_MODE=0)" if config.DEV_MODE else "",
         "ALLOWED_ORIGINS = * — разреши только свой сайт (например https://yaroslav-commits.github.io)" if "*" in config.ALLOWED_ORIGINS else "",
         "TON_WALLET не задан — пополнение и вывод в TON выключены" if not config.TON_WALLET else "",
         "CHANNEL указывает на тестовый канал" if "test" in config.CHANNEL.lower() else "",
         "Аккаунт для подарков не подключён (Telegram для бизнеса → Чат-боты)" if not game.setting("biz:conn") else "",
-        "Нет авто-цен NFT: подключи /portals" if not (config.NFT_FLOORS_URL or config.PORTALS_AUTH or game.setting("portals:auth")) else "",
+        "Нет авто-цен NFT: подключи /portals" if not (config.NFT_FLOORS_URL or config.API_PORTALS_AUTH or game.setting("portals:auth")) else "",
     ) if x]
     for a in config.ADMIN_IDS:
         try:

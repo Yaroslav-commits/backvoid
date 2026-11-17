@@ -26,10 +26,13 @@ APP_NAME = os.getenv("APP_NAME", "AstraRoll")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 # Где открывается Web App (GitHub Pages или этот же домен)
-WEBAPP_URL = os.getenv("WEBAPP_URL", "")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://yaroslav-commits.github.io/voidplayfiles/")
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
+# Порт именно для API бота. Нужен, если хостинг сам занимает PORT своим сервером (bothost так делает в новых проектах):
+# тогда задай API_PORT=8081 (или другой) и в панели хостинга направь домен на этот порт
+API_PORT = int(os.getenv("API_PORT") or PORT)
 # Папка с сайтом (необязательно). Если указать — бот сам раздаёт сайт на своём домене
 # и CORS вообще не нужен: WEBAPP_URL = https://<домен-бота>/
 WEBAPP_DIR = os.getenv("WEBAPP_DIR", "")
@@ -58,9 +61,12 @@ GIFTS_ACCOUNT = os.getenv("GIFTS_ACCOUNT", "@nersew")
 # Админы бота (Telegram id), записаны прямо в коде
 ADMIN_IDS = [6378471773]
 
+# Экономика (1 звезда в игре = 1 Telegram Star)
+# «Первый заработок без вложений»: новичок сразу получает стартовые звёзды
 WELCOME_BONUS = int(os.getenv("WELCOME_BONUS", "5"))
 SUBSCRIBE_REWARD = int(os.getenv("SUBSCRIBE_REWARD", "10"))
 DAILY_REWARD = int(os.getenv("DAILY_REWARD", "3"))
+# Ежедневный бонус только тем, кто пополнял хотя бы на эту сумму (0 — всем). Иначе его собирают с фейков каждый день
 DAILY_MIN_DEPOSIT = int(os.getenv("DAILY_MIN_DEPOSIT", "50"))
 REF_PERCENT = int(os.getenv("REF_PERCENT", "10"))         # % с твоей комиссии, которую приносят приглашённые (см. LEVELS)
 REF_PER_FRIEND = int(os.getenv("REF_PER_FRIEND", "0"))     # бонус за первое пополнение друга (звёзды «из воздуха» — лучше 0)
@@ -84,6 +90,11 @@ PVP_MIN_BET = int(os.getenv("PVP_MIN_BET", "1"))
 PVP_MAX_BET = int(os.getenv("PVP_MAX_BET", "50000"))
 PVP_MAX_PLAYERS = int(os.getenv("PVP_MAX_PLAYERS", "30"))
 
+# ---------- Цены подарков ----------
+# telegram — каталог и цены сами подтягиваются из Telegram (официальный список подарков и их цены в звёздах),
+#            список GIFTS ниже нужен только как запасной, пока Telegram не ответил
+# manual   — только список GIFTS ниже
+# nft      — только настоящие NFT со склада бота (проигранные игроками и лежащие на твоём аккаунте). Рекомендуется
 GIFTS_SOURCE = os.getenv("GIFTS_SOURCE", "nft")
 SHOP_MARKUP = float(os.getenv("SHOP_MARKUP", "0.05"))            # наценка магазина подарков к цене коллекции
 GIFTS_SYNC_MINUTES = int(os.getenv("GIFTS_SYNC_MINUTES", "30"))  # как часто обновлять цены
