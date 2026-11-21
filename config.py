@@ -37,7 +37,7 @@ API_PORT = int(os.getenv("API_PORT") or PORT)
 # и CORS вообще не нужен: WEBAPP_URL = https://<домен-бота>/
 WEBAPP_DIR = os.getenv("WEBAPP_DIR", "")
 # С каких сайтов можно ходить в API (GitHub Pages и т.п.). * — с любых
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "https://yaroslav-commits.github.io").split(",") if o.strip()]
 
 # Всё, что нельзя терять, лежит в папке data/ (база, кэш аватарок). При обновлении бота эту папку НЕ трогай
 DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
