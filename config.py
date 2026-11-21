@@ -29,7 +29,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or os.gete
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://yaroslav-commits.github.io/voidplayfiles/")
 
 HOST = os.getenv("HOST", "0.0.0.0")
-PORT = int(os.getenv("PORT", "8080"))
+PORT = int(os.getenv("PORT", "3000"))
 # Bothost: «Дополнительные настройки» → «Использовать домен», внутренний порт например 3000 — хостинг сам передаст его в PORT
 # и направит домен на этот порт. API_PORT задавать НЕ нужно (только если очень надо слушать порт, отличный от PORT)
 API_PORT = int(os.getenv("API_PORT") or PORT)
