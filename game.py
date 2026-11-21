@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode
 
 import config
 from config import LEVELS, PACKS, TASKS, level_for
+from cases import CasesMixin
 from crash import CRASH_SCHEMA, CrashMixin
 from pvp import PvpMixin
 
@@ -312,7 +313,7 @@ def season_bounds(ts: int | None = None) -> tuple[int, int]:
     return int(start.timestamp()), int(end.timestamp())
 
 
-class Game(PvpMixin, CrashMixin):
+class Game(PvpMixin, CrashMixin, CasesMixin):
     def __init__(self, db: DB):
         self.db = db
         self.closed: set[str] = {r["key"][5:] for r in db.q("SELECT key FROM settings WHERE key LIKE 'game:%' AND value='0'")}
@@ -724,7 +725,7 @@ class Game(PvpMixin, CrashMixin):
                 "houseEdge": config.HOUSE_EDGE, "maxChance": config.MAX_CHANCE, "upgradeMaxRatio": config.UPGRADE_MAX_RATIO,
                 "pvpFee": config.PVP_FEE, "pvpMinBet": config.PVP_MIN_BET, "pvpMaxBet": config.PVP_MAX_BET,
                 "welcomeBonus": config.WELCOME_BONUS, "dailyReward": config.DAILY_REWARD,
-                "withdrawFee": config.WITHDRAW_FEE, "crashEdge": config.CRASH_EDGE, "wdMinDeposit": config.WITHDRAW_MIN_DEPOSIT, "dailyMinDeposit": config.DAILY_MIN_DEPOSIT,
+                "withdrawFee": config.WITHDRAW_FEE, "crashEdge": config.CRASH_EDGE, "caseRtp": config.CASE_RTP, "wdMinDeposit": config.WITHDRAW_MIN_DEPOSIT, "dailyMinDeposit": config.DAILY_MIN_DEPOSIT,
                 "deposited": self.db.one("SELECT COALESCE(SUM(amount),0) s FROM payments WHERE user_id=?", (uid,))["s"], "nftTransferStars": config.NFT_TRANSFER_STARS,
                 "minesEdge": config.MINES_EDGE, "minBet": config.MIN_BET, "maxBet": config.MAX_BET, "appName": config.APP_NAME,
             },

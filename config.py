@@ -24,20 +24,20 @@ def _ints(v: str) -> list[int]:
 # Название проекта — меняется в одном месте (бот, сайт берёт его с сервера)
 APP_NAME = os.getenv("APP_NAME", "AstraRoll")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("API_TOKEN") or ""
 # Где открывается Web App (GitHub Pages или этот же домен)
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://yaroslav-commits.github.io/voidplayfiles/")
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
-# Порт именно для API бота. Нужен, если хостинг сам занимает PORT своим сервером (bothost так делает в новых проектах):
-# тогда задай API_PORT=8081 (или другой) и в панели хостинга направь домен на этот порт
+# Bothost: «Дополнительные настройки» → «Использовать домен», внутренний порт например 3000 — хостинг сам передаст его в PORT
+# и направит домен на этот порт. API_PORT задавать НЕ нужно (только если очень надо слушать порт, отличный от PORT)
 API_PORT = int(os.getenv("API_PORT") or PORT)
 # Папка с сайтом (необязательно). Если указать — бот сам раздаёт сайт на своём домене
 # и CORS вообще не нужен: WEBAPP_URL = https://<домен-бота>/
 WEBAPP_DIR = os.getenv("WEBAPP_DIR", "")
 # С каких сайтов можно ходить в API (GitHub Pages и т.п.). * — с любых
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "https://yaroslav-commits.github.io").split(",") if o.strip()]
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
 # Всё, что нельзя терять, лежит в папке data/ (база, кэш аватарок). При обновлении бота эту папку НЕ трогай
 DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
@@ -150,8 +150,13 @@ CRASH_MAX_WIN = int(os.getenv("CRASH_MAX_WIN", "20000"))          # потоло
 BACKUP_KEEP = int(os.getenv("BACKUP_KEEP", "14"))
 BACKUP_TO_ADMIN = os.getenv("BACKUP_TO_ADMIN", "1") == "1"
 
+# ---------- Кейсы ----------
+# Какую долю цены кейса игроки получают назад в среднем (0.88 → проекту 12% с каждого открытия на дистанции).
+# Сами кейсы и призы — в cases.py
+CASE_RTP = float(os.getenv("CASE_RTP", "0.88"))
+
 # Игры, которые можно открывать/закрывать из бота: /games
-GAMES = {"upgrade": "Апгрейдер", "mines": "Мины", "crash": "Самолётик", "roulette": "PvP Рулетка", "fireice": "PvP Огонь и лёд"}
+GAMES = {"upgrade": "Апгрейдер", "mines": "Мины", "crash": "Самолётик", "cases": "Кейсы", "roulette": "PvP Рулетка", "fireice": "PvP Огонь и лёд"}
 
 # Разработка: принимать запросы без подписи Telegram (только для локальных тестов!)
 DEV_MODE = os.getenv("DEV_MODE", "0") == "1"

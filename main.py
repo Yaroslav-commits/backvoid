@@ -72,7 +72,7 @@ ADMIN_COMMANDS = [
     ]),
     ("Игры", [
         ("games", "", "открыть или закрыть игры кнопками"),
-        ("open", "игра", "открыть игру: upgrade, mines, crash, roulette, fireice или all"),
+        ("open", "игра", "открыть игру: upgrade, mines, crash, cases, roulette, fireice или all"),
         ("close", "игра", "закрыть игру (те же названия)"),
     ]),
     ("Игроки", [
@@ -637,6 +637,17 @@ async def h_pvp_bet(request):
     return ok(st, balance=g.balance(uid))
 
 
+# ---------------- Кейсы ----------------
+async def h_cases(request):
+    current_user(request)
+    return ok(cases=request.app["game"].cases_list())
+
+
+async def h_case_open(request):
+    uid = current_user(request)
+    return ok(request.app["game"].case_open(uid, str((await body(request)).get("id") or "")))
+
+
 # ---------------- Самолётик ----------------
 async def h_crash(request):
     uid = current_user(request)
@@ -903,6 +914,8 @@ def build_app(game: Game, bot: Bot, services: Services | None = None) -> web.App
     r.add_post("/api/mines/open", h_mines_open)
     r.add_post("/api/mines/cashout", h_mines_cashout)
     r.add_get("/api/pvp", h_pvp)
+    r.add_get("/api/cases", h_cases)
+    r.add_post("/api/cases/open", h_case_open)
     r.add_get("/api/crash", h_crash)
     r.add_post("/api/crash/bet", h_crash_bet)
     r.add_post("/api/crash/cashout", h_crash_cashout)
@@ -972,9 +985,9 @@ async def main() -> None:
 
     await services.start()
     issues = [x for x in (
-        (f"Порт {config.API_PORT} занят (его держит сам хостинг) — API запущен на порту {api_port}. "
-         f"Сайт не достучится до бота, пока домен хостинга не ведёт на этот порт: укажи {api_port} в настройках домена/порта в панели хостинга "
-         f"и задай переменную API_PORT={api_port}, чтобы порт не менялся") if api_port and api_port != config.API_PORT else "",
+        (f"Порт {config.API_PORT} занят сервером-заглушкой хостинга, поэтому приложение пишет «Нет связи». "
+         f"В панели bothost: «Дополнительные настройки» → включи «Использовать домен» и укажи внутренний порт 3000 (не 8080), "
+         f"удали переменную API_PORT, если задавал, и перезапусти бота") if api_port and api_port != config.API_PORT else "",
         f"API не запустился: порты {config.API_PORT}–{config.API_PORT + 10} заняты. Бот в Telegram работает, а приложение — нет. Задай свободный порт переменной PORT"
         if not api_port else "",
         "DEV_MODE включён — любой может играть за чужой аккаунт! Выключи (DEV_MODE=0)" if config.DEV_MODE else "",
