@@ -111,7 +111,7 @@ TON_USD = float(os.getenv("TON_USD", "0"))               # запасной ку
 TON_MIN_STARS = int(os.getenv("TON_MIN_STARS", "50"))    # минимальное пополнение в TON, в звёздах
 
 # ---------- Вывод и NFT-подарки ----------
-WITHDRAW_FEE = float(os.getenv("WITHDRAW_FEE", "0.03"))            # твоя комиссия с любого вывода (0.03 = 3%)
+WITHDRAW_FEE = float(os.getenv("WITHDRAW_FEE", "0.04"))            # твоя комиссия с любого вывода (0.03 = 3%)
 # Вывод звёзд — только в TON, заявку оплачивает админ со своего кошелька.
 # Сколько $ платим за 1 звезду при выводе. ВАЖНО: за звёзды, купленные через Telegram Stars, Telegram отдаёт тебе ~$0.013,
 # поэтому ставить больше 0.013 можно, только если пополнение принимается в основном в TON
@@ -121,7 +121,7 @@ WITHDRAW_MIN_DEPOSIT = int(os.getenv("WITHDRAW_MIN_DEPOSIT", "50"))   # выво
 # если поставить больше, NFT в магазине станут дешевле рынка и их будут скупать за Telegram Stars в убыток тебе
 NFT_STAR_USD = float(os.getenv("NFT_STAR_USD", str(WITHDRAW_STAR_USD)))
 # Пост в канал о крупных выигрышах в PvP: от какого банка (0 — выключено). Бот должен быть админом канала CHANNEL
-PVP_ANNOUNCE_MIN = int(os.getenv("PVP_ANNOUNCE_MIN", "500"))
+PVP_ANNOUNCE_MIN = int(os.getenv("PVP_ANNOUNCE_MIN", "5000"))
 NFT_TRANSFER_STARS = int(os.getenv("NFT_TRANSFER_STARS", "25"))    # сколько звёзд Telegram берёт за передачу NFT (платит игрок)
 # Необязательно: адрес JSON с флорами коллекций ({"Plush Pepe": 1234.5, ...} или [{"name":..,"floor":..}]) — цены обновятся сами.
 # Без него цены задаются командой /floor

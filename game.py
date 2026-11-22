@@ -319,6 +319,10 @@ class Game(PvpMixin, CrashMixin, CasesMixin):
         self.closed: set[str] = {r["key"][5:] for r in db.q("SELECT key FROM settings WHERE key LIKE 'game:%' AND value='0'")}
         self.catalog: list[dict] = []
         self.by_id: dict[str, dict] = {}
+        try:   # обновление со старой версии: игрок может скрыть свой юзернейм в публичном профиле
+            db.run("ALTER TABLE users ADD COLUMN hide_user INTEGER NOT NULL DEFAULT 0")
+        except Exception:  # noqa: BLE001 — колонка уже есть
+            pass
         try:   # обновление со старой версии: у каждого NFT своя цена передачи
             db.run("ALTER TABLE nfts ADD COLUMN transfer_stars INTEGER")
         except Exception:  # noqa: BLE001 — колонка уже есть
@@ -502,6 +506,34 @@ class Game(PvpMixin, CrashMixin, CasesMixin):
             self.user(to_uid or uid)
             self._give(to_uid or uid, f"nft:{slug}")
 
+    # ---------------- публичный профиль ----------------
+    def set_privacy(self, uid: int, hide: bool):
+        self.user(uid)
+        self.db.run("UPDATE users SET hide_user=? WHERE id=?", (1 if hide else 0, uid))
+
+    def profile(self, uid: int) -> dict:
+        """Публичный профиль: только то, что не жалко показать другим (без баланса)."""
+        r = self.db.one("SELECT * FROM users WHERE id=?", (int(uid),))
+        if not r:
+            raise GameError("not_found")
+        one = lambda sql: self.db.one(sql, (r["id"],))  # noqa: E731
+        games = one("SELECT COUNT(*) c, COALESCE(SUM(amount),0) s FROM transactions WHERE user_id=? AND type='fee'")
+        wins = one("SELECT COUNT(*) c, COALESCE(SUM(amount),0) s, COALESCE(MAX(amount),0) m FROM transactions WHERE user_id=? AND type='win'")
+        best = self.db.one("SELECT amount, game, gift_id FROM transactions WHERE user_id=? AND type='win' ORDER BY amount DESC LIMIT 1", (r["id"],))
+        fav = self.db.one("SELECT game, COUNT(*) c FROM transactions WHERE user_id=? AND type='fee' AND game IS NOT NULL "
+                          "GROUP BY game ORDER BY c DESC LIMIT 1", (r["id"],))
+        inv = sorted(self.inventory(r["id"]), key=lambda g: -(g.get("price") or 0))
+        rank = self.db.one("SELECT COUNT(*) + 1 c FROM (SELECT user_id, SUM(amount) s FROM transactions WHERE type='fee' GROUP BY user_id) "
+                           "WHERE s > ?", (games["s"],))["c"] if games["s"] else None
+        return {
+            **self.public_user(r), "joined": r["created"] * 1000, "hidden": bool(r["hide_user"]),
+            "games": games["c"], "turnover": games["s"], "wins": wins["c"], "won": wins["s"], "rank": rank,
+            "best": {"amount": best["amount"], "game": best["game"], "gift": self.gift_view(best["gift_id"]) if best["gift_id"] else None} if best else None,
+            "favorite": fav["game"] if fav else None,
+            "gifts": [{k: g.get(k) for k in ("id", "name", "price", "img", "nft", "slug")} for g in inv[:6]], "giftCount": len(inv),
+            "giftValue": sum(g.get("price") or 0 for g in inv),
+        }
+
     def admin_ban(self, uid: int, banned: bool):
         self.db.run("UPDATE users SET banned=? WHERE id=?", (1 if banned else 0, int(uid)))
 
@@ -634,7 +666,9 @@ class Game(PvpMixin, CrashMixin, CasesMixin):
     def public_user(row) -> dict:
         r = dict(row)
         name = " ".join(x for x in (r.get("first_name"), r.get("last_name")) if x) or (r.get("username") or "Игрок")
-        return {"id": r["id"], "username": r.get("username") or "", "name": name, "avatar": f"/api/avatar/{r['id']}"}
+        # юзернейм виден другим, только если игрок его не скрыл
+        user = "" if r.get("hide_user") else (r.get("username") or "")
+        return {"id": r["id"], "username": user, "name": name, "avatar": f"/api/avatar/{r['id']}"}
 
     # ---------------- состояние для фронта ----------------
     def gift_view(self, gift_id: str, uid: str | None = None) -> dict:
@@ -703,7 +737,7 @@ class Game(PvpMixin, CrashMixin, CasesMixin):
     def state(self, uid: int) -> dict:
         u = self.user(uid)
         return {
-            "user": {**self.public_user(u), "photo": u["photo_url"] or ""},
+            "user": {**self.public_user(u), "username": u["username"] or "", "photo": u["photo_url"] or "", "hideUser": bool(u["hide_user"])},
             "balance": {"stars": u["balance"]},
             "subscribed": bool(u["subscribed"]),
             "daily": {"ready": u["last_daily"] != datetime.now(timezone.utc).strftime("%Y-%m-%d"), "reward": config.DAILY_REWARD},
