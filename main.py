@@ -624,6 +624,12 @@ async def h_mines_cashout(request):
 
 
 # ---------------- PvP ----------------
+async def h_pvp_history(request):
+    uid = current_user(request)
+    q = request.query
+    return ok(rounds=request.app["game"].pvp_rounds_full(q.get("game", "roulette"), uid, int(q.get("limit") or 30)))
+
+
 async def h_pvp(request):
     uid = current_user(request)
     return ok(request.app["game"].pvp_state(request.query.get("game", "roulette"), uid))
@@ -931,6 +937,7 @@ def build_app(game: Game, bot: Bot, services: Services | None = None) -> web.App
     r.add_post("/api/mines/open", h_mines_open)
     r.add_post("/api/mines/cashout", h_mines_cashout)
     r.add_get("/api/pvp", h_pvp)
+    r.add_get("/api/pvp/history", h_pvp_history)
     r.add_get("/api/cases", h_cases)
     r.add_post("/api/cases/open", h_case_open)
     r.add_get("/api/crash", h_crash)

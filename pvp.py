@@ -235,6 +235,30 @@ class PvpMixin:
             out.append(item)
         return out
 
+    def pvp_rounds_full(self, game: str, uid: int | None = None, limit: int = 30) -> list[dict]:
+        """Подробная история для экрана «История»: участники, ставки, подарки, шансы и ключ проверки — чтобы переиграть раунд."""
+        if game not in PVP_GAMES:
+            from game import GameError  # noqa: PLC0415
+            raise GameError("not_found")
+        rows = self.db.q("SELECT * FROM pvp_rounds WHERE game=? AND status='done' ORDER BY id DESC LIMIT ?", (game, max(1, min(int(limit), 50))))
+        out = []
+        for r in rows:
+            bets = self._pvp_bets(r["id"])
+            pot = r["pot"] or sum(b["bamount"] for b in bets) or 1
+            gifts: dict[int, list] = {}
+            for t in self.db.q("SELECT user_id, gift_id FROM transactions WHERE type='fee' AND item='nft' AND extra=?", (f"pvp:{r['id']}",)):
+                gifts.setdefault(t["user_id"], []).append(self.gift_view(t["gift_id"]))
+            players = [{**self.public_user(b), "amount": b["bamount"], "side": b["bside"], "chance": round(b["bamount"] / pot, 4),
+                        "payout": b["bpayout"], "gifts": gifts.get(b["id"], [])} for b in bets]
+            mine = next((p for p in players if p["id"] == uid), None)
+            item = {"id": r["id"], "at": r["resolved_at"], "pot": r["pot"], "fee": r["fee"], "roll": r["roll"], "seed": r["seed"], "hash": r["hash"],
+                    "chance": round(r["win_chance"] or 0, 4), "players": players,
+                    "my": {"amount": mine["amount"], "payout": mine["payout"]} if mine else None,
+                    "prize": sum(len(p["gifts"]) for p in players)}
+            item["winner"] = next((p for p in players if str(p["id"]) == str(r["winner"])), None) if game == "roulette" else r["winner"]
+            out.append(item)
+        return out
+
     def house_total(self) -> dict:
         rows = self.db.q("SELECT game, COALESCE(SUM(amount),0) s FROM house GROUP BY game")
         return {r["game"]: r["s"] for r in rows}

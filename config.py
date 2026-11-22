@@ -86,7 +86,7 @@ UPGRADE_MAX_RATIO = float(os.getenv("UPGRADE_MAX_RATIO", "0.8"))
 PVP_FEE = float(os.getenv("PVP_FEE", "0"))   # 0 — в PvP комиссии нет, проект зарабатывает на выводе
 PVP_ROUND_SECONDS = int(os.getenv("PVP_ROUND_SECONDS", "20"))   # таймер раунда после входа второго игрока
 PVP_SHOW_SECONDS = int(os.getenv("PVP_SHOW_SECONDS", "13"))     # пауза между раундами: ~7 с крутится колесо + показ победителя
-PVP_MIN_BET = int(os.getenv("PVP_MIN_BET", "1"))
+PVP_MIN_BET = int(os.getenv("PVP_MIN_BET", "5"))
 PVP_MAX_BET = int(os.getenv("PVP_MAX_BET", "50000"))
 PVP_MAX_PLAYERS = int(os.getenv("PVP_MAX_PLAYERS", "30"))
 
