@@ -1002,6 +1002,16 @@ class Game(PvpMixin, CrashMixin, CasesMixin):
                           "AND status IN ('pending','done')")["s"]
         return {"in": cin, "out": out, "left": cin - out}
 
+    WALLET_RE = r"[A-Za-z0-9_\-+/]{48}|-?\d:[0-9a-fA-F]{64}"
+
+    def set_wallet(self, uid: int, address: str):
+        """TON-кошелёк игрока (подключённый через TON Connect) — подставляется при выводе."""
+        address = str(address or "").strip()
+        if address and not re.fullmatch(self.WALLET_RE, address):
+            raise GameError("bad_wallet")
+        self.user(uid)
+        self.db.run("UPDATE users SET wallet=? WHERE id=?", (address or None, uid))
+
     def withdraw(self, uid: int, amount: int, wallet: str, ton_usd: float) -> dict:
         """Заявка на вывод в TON. С баланса списывается amount, игрок получает (amount − комиссия) по курсу вывода."""
         wallet = str(wallet or "").strip()

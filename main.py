@@ -774,6 +774,12 @@ async def h_withdraw(request):
     return ok(balance=game.balance(uid), id=w["id"], ton=w["ton"])
 
 
+async def h_wallet(request):
+    uid = current_user(request)
+    request.app["game"].set_wallet(uid, (await body(request)).get("address"))
+    return ok()
+
+
 async def h_nft_withdraw(request):
     """Вывод NFT: бот передаёт подарок игроку с аккаунта проекта."""
     uid = current_user(request)
@@ -929,6 +935,7 @@ def build_app(game: Game, bot: Bot, services: Services | None = None) -> web.App
     r.add_post("/api/invoice", h_invoice)
     r.add_post("/api/withdraw", h_withdraw)
     r.add_post("/api/nft/withdraw", h_nft_withdraw)
+    r.add_post("/api/wallet", h_wallet)
     r.add_post("/api/shop/buy", h_shop_buy)
     r.add_get("/api/admin", h_admin)
     r.add_post("/api/admin/act", h_admin_act)
